@@ -1,6 +1,6 @@
 ## JPX/JBIG2 image decoder
 
-While working with PDF compression/OCR ([https://github.com/gstolarov/pdf-shrink](https://github.com/gstolarov/pdf-shrink)) I found out that some image files (JPX2000 and JBIG2) are not being handled by iTextSharp library I used. Unfortunately options to decode those files in C# are very limited and one that are available don't properly hand most of the files I had at hand. 
+While working with PDF compression/OCR ([https://github.com/gstolarov/pdf-shrink](https://github.com/gstolarov/pdf-shrink)) I found out that some image files (JPX2000 and JBIG2) are not being handled by iTextSharp library I used. Unfortunately options to decode those files in C# are very limited and one that are available don't properly handle most of the files I had at hand.Â 
 
 ### JPX (JPEG 2000)
 
@@ -22,7 +22,7 @@ JBIG2 file type was designed to store monochrome images. Actually there is a num
 *   [https://github.com/afila/JBIG2-Image-Decoder.NET](https://github.com/afila/JBIG2-Image-Decoder.NET)
 *   [https://github.com/nicholsab/JBig2Decoder.NETStandard](https://github.com/nicholsab/JBig2Decoder.NETStandard)
 
-Unfortunately all of those failed to handle most of the files I was testing with. My next step was to try to utilize xPdf ([https://github.com/kermitt2/xpdf-4.00/blob/master/xpdf/JBIG2Stream.cc](https://github.com/kermitt2/xpdf-4.00/blob/master/xpdf/JBIG2Stream.cc)). This one was working much better but still was failing with a lot of files. The final solution was to convert PdfBox addon ([https://github.com/apache/pdfbox-jbig2](https://github.com/apache/pdfbox-jbig2)). This one while still fails to handle some files but works significantly better then other options.
+Unfortunately all of those failed to handle most of the files I was testing with. My next step was to try to utilize xPdf ([https://github.com/kermitt2/xpdf-4.00/blob/master/xpdf/JBIG2Stream.cc](https://github.com/kermitt2/xpdf-4.00/blob/master/xpdf/JBIG2Stream.cc)). This one was working much better but still was failing with a lot of files. The final solution was to convert (and heavily refactor) PdfBox Java addon ([https://github.com/apache/pdfbox-jbig2](https://github.com/apache/pdfbox-jbig2)). This one while still fails to handle some files but works significantly better then other options.
 
 To convert JBIG files to images use following code:
 
@@ -34,7 +34,7 @@ The second optional parameter is global symbols sometimes used in PDF for the JB
 
 ### Test application
 
-In the upper right corner of the test application is small folder icon. Once clicked it will prompt for file(s) to open. If one file selected it will open it in the window. If multiple files are selected, it will create a subfolder **out** in the directory where the files are located, _delete all the **JPG** files from there_ and create a new **JPG** file for each file selected. 
+In the upper right corner of the test application is small folder icon. Once clicked it will prompt for file(s) to open. If one file selected it will open it in the window. If multiple files are selected, it will create a subfolder **out** in the directory where the files are located, _delete all the **JPG** files from there_ and create a new **JPG** file for each file selected.Â 
 
 The application assumes that J2K files are JPX/JPEG2000, and JB2 files are JBIG. For each JB2 file it will check faile with the same name and .GLOB extension. If this file is found it will be assumed to contain global symbox for GB2 file.
 
