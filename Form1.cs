@@ -43,9 +43,7 @@ namespace wf {
 			if (!nm.ToLower().EndsWith("jb2"))
 				img = new XPdfJpx(data).decodeImage();
 			else
-				//img = new XPdfJBig2(data, glob).decodeImage();
 				img = new PBoxJBig2(data, glob).decodeImage();
-			
 			Console.WriteLine("" + (DateTime.Now - c) + " File " + nm);
 			if (img != null)
 				pictureBox1.Image = img;
@@ -56,10 +54,7 @@ namespace wf {
 		public Form1() {
 			InitializeComponent();
 			try {
-				//loadFile(@"C:\temp\pdfjs\jb2\042_3.jb2");
-				loadFile(@"C:\temp\pdfjs\jb2\042_11.jb2");
-
-				//loadFile(@"C:\temp\pdfjs\j2k\sm6.j2k");
+				//loadFile(@"C:\temp\pdfjs\jb2\042_11.jb2");
 			}
 			catch (Exception ex) {
 				MessageBox.Show("Error to load " + ex.Message);

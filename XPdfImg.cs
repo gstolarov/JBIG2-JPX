@@ -558,7 +558,7 @@ namespace XPdf {
 						if (nComps != 1)
 							buf[curX * nComps + (2 - curComp)] = (byte)pix;
 						else if (pix != 0) {
-							pix = gsPlt == null ? 255   // pix ?
+							pix = gsPlt == null ? 255   // use just pix for grayscale!!!!!
 									: ((gsPlt.Length > 256) ? gsPlt[pix * 3] : gsPlt[pix]);
 							buf[curX*3] = buf[curX*3+1] = buf[curX*3+2] = (byte)pix;
 						}
