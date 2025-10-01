@@ -40,4 +40,4 @@ The application assumes that J2K files are JPX/JPEG2000, and JB2 files are JBIG.
 
 Test images I used are stored in the testImgs.zip
 
-Have a blast.
+If you planning to use code in your project just include XPdfImg.cs and have a blast.
