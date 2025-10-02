@@ -1,0 +1,94 @@
+
+<!DOCTYPE html>
+<html lang="en-US">
+  <head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="google-site-verification" content="VkGEZbIgX7ZPSXiBtOSXHzRS6n5vR7ydW3WdnO9S_bI" />
+
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>JPX/JBIG2 image decoder | JBIG2-JPX</title>
+<meta name="generator" content="Jekyll v3.10.0" />
+<meta property="og:title" content="JPX/JBIG2 image decoder" />
+<meta property="og:locale" content="en_US" />
+<link rel="canonical" href="https://gstolarov.github.io/JBIG2-JPX/" />
+<meta property="og:url" content="https://gstolarov.github.io/JBIG2-JPX/" />
+<meta property="og:site_name" content="JBIG2-JPX" />
+<meta property="og:type" content="website" />
+<meta name="twitter:card" content="summary" />
+<meta property="twitter:title" content="JPX/JBIG2 image decoder" />
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebSite","headline":"JPX/JBIG2 image decoder","name":"JBIG2-JPX","url":"https://gstolarov.github.io/JBIG2-JPX/"}</script>
+<!-- End Jekyll SEO tag -->
+
+    <link rel="stylesheet" href="/JBIG2-JPX/assets/css/style.css?v=484e46dfee443d55f3ff2c9b2831f5dc4c495401">
+    <!-- start custom head snippets, customize with your own _includes/head-custom.html file -->
+
+<!-- Setup Google Analytics -->
+
+
+
+<!-- You can set your favicon here -->
+<!-- link rel="shortcut icon" type="image/x-icon" href="/JBIG2-JPX/favicon.ico" -->
+
+<!-- end custom head snippets -->
+
+  </head>
+  <body>
+    <div class="container-lg px-3 my-5 markdown-body">
+      
+      <h1><a href="https://gstolarov.github.io/JBIG2-JPX/">JBIG2-JPX</a></h1>
+      
+
+      <h2 id="jpxjbig2-image-decoder">JPX/JBIG2 image decoder</h2>
+
+<p>While working with PDF compression/OCR (<a href="https://github.com/gstolarov/pdf-shrink">https://github.com/gstolarov/pdf-shrink</a>) I found out that some image files (JPX2000 and JBIG2) are not being handled by iTextSharp library I used. Unfortunately options to decode those files in C# are very limited and one that are available don’t properly handle most of the files I had at hand. </p>
+
+<h3 id="jpx-jpeg-2000">JPX (JPEG 2000)</h3>
+
+<p>Those files (commonly using .j2k extension) are optimized version of the JPEG files to store full color images. They provide somewhat better compression ratio. Nowadays OpenJPEG library is providing functionality to decode them. I found no free C# code that I can use. Since I use PDF functionality in the multiple projects, I didn’t want to create dependency on external native DLL so using OpenJPEG was less then ideal. Other then OpenJPEG library, the only other open source I found dealing with JPX files was XPDF (c++) code (<a href="https://github.com/kermitt2/xpdf-4.00/blob/master/xpdf/JPXStream.cc">https://github.com/kermitt2/xpdf-4.00/blob/master/xpdf/JPXStream.cc</a>). I migrated and heavily refactored this code to suit my needs.</p>
+
+<p>The resulting code does seem to do the job for all the files I had. The only problem I found is dealing with greyscale files. When stored in PDF those JPX files seems to utilize PDF color space for palette so function to extract images has a palette parameter. When provided it will be utilized, otherwise it will be just black and white. The decodeImage function can be easily modified to use grayscale instead.</p>
+
+<p>To convert JPX files to images use following code:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Image img = new XPdfJpx(byteArray).decodeImage()
+</code></pre></div></div>
+
+<h3 id="jbig2">JBIG2</h3>
+
+<p>JBIG2 file type was designed to store monochrome images. Actually there is a number of decoders available to handle those files even in c#:</p>
+
+<ul>
+  <li><a href="https://github.com/Daniel-Glucksman/JBig2Decoder.NET">https://github.com/Daniel-Glucksman/JBig2Decoder.NET</a></li>
+  <li><a href="https://github.com/afila/JBIG2-Image-Decoder.NET">https://github.com/afila/JBIG2-Image-Decoder.NET</a></li>
+  <li><a href="https://github.com/nicholsab/JBig2Decoder.NETStandard">https://github.com/nicholsab/JBig2Decoder.NETStandard</a></li>
+</ul>
+
+<p>Unfortunately all of those failed to handle most of the files I was testing with. My next step was to try to utilize xPdf (<a href="https://github.com/kermitt2/xpdf-4.00/blob/master/xpdf/JBIG2Stream.cc">https://github.com/kermitt2/xpdf-4.00/blob/master/xpdf/JBIG2Stream.cc</a>). This one was working much better but still was failing with a lot of files. The final solution was to convert (and heavily refactor) PdfBox Java addon (<a href="https://github.com/apache/pdfbox-jbig2">https://github.com/apache/pdfbox-jbig2</a>). This one while still fails to handle some files but works significantly better then other options.</p>
+
+<p>To convert JBIG files to images use following code:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Image img = new PBoxJBig2(byteData, globBytes).decodeImage();
+</code></pre></div></div>
+
+<p>The second optional parameter is global symbols sometimes used in PDF for the JBIG files.</p>
+
+<h3 id="test-application">Test application</h3>
+
+<p>In the upper right corner of the test application is small folder icon. Once clicked it will prompt for file(s) to open. If one file selected it will open it in the window. If multiple files are selected, it will create a subfolder <strong>out</strong> in the directory where the files are located, <em>delete all the <strong>JPG</strong> files from there</em> and create a new <strong>JPG</strong> file for each file selected. </p>
+
+<p>The application assumes that J2K files are JPX/JPEG2000, and JB2 files are JBIG. For each JB2 file it will check faile with the same name and .GLOB extension. If this file is found it will be assumed to contain global symbox for GB2 file.</p>
+
+<p>Test images I used are stored in the testImgs.zip</p>
+
+<p>If you planning to use code in your project just include XPdfImg.cs and have a blast.</p>
+
+
+      
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/anchor-js/4.1.0/anchor.min.js" integrity="sha256-lZaRhKri35AyJSypXXs4o6OPFTbTmUoltBbDCbdzegg=" crossorigin="anonymous"></script>
+    <script>anchors.add();</script>
+  </body>
+</html>
