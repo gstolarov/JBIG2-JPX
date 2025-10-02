@@ -36,7 +36,7 @@ The second optional parameter is global symbols sometimes used in PDF for the JB
 
 In the upper right corner of the test application is small folder icon. Once clicked it will prompt for file(s) to open. If one file selected it will open it in the window. If multiple files are selected, it will create a subfolder **out** in the directory where the files are located, _delete all the **JPG** files from there_ and create a new **JPG** file for each file selected. 
 
-The application assumes that J2K files are JPX/JPEG2000, and JB2 files are JBIG. For each JB2 file it will check faile with the same name and .GLOB extension. If this file is found it will be assumed to contain global symbox for GB2 file.
+The application assumes that J2K files are JPX/JPEG2000, and JB2 files are JBIG. For each JB2 file it will check file with the same name and .GLOB extension. If this file is found it will be assumed to contain global symbox for GB2 file.
 
 Test images I used are stored in the testImgs.zip
 
