@@ -1,4 +1,4 @@
-# [JPX/JBIG2 image decoder](https://github.com/gstolarov/JBIG2-JPX)
+# [JPX/JBIG2 C# image decoder](https://github.com/gstolarov/JBIG2-JPX)
 
 While working with PDF compression/OCR ([https://github.com/gstolarov/pdf-shrink](https://github.com/gstolarov/pdf-shrink)) I found out that some image files (JPX2000 and JBIG2) are not being handled by iTextSharp library I used. Unfortunately options to decode those files in C# are very limited and one that are available don't properly handle most of the files I had at hand. 
 
