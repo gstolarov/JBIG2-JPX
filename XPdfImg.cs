@@ -2469,17 +2469,6 @@ namespace XPdf {
 		}
 		internal enum ComboOper { OR = 0, AND = 1, XOR = 2, XNOR = 3, REPLACE = 4 }
 		internal class SegmentHeader {
-			private static Dictionary<int, Type> SegTypesMap = new Dictionary<int, Type> {
-				{ 0,  typeof(SymbolDictionary) },       { 4,  typeof(TextRegion) },
-				{ 6,  typeof(TextRegion) },             { 7,  typeof(TextRegion) },
-				{ 16, typeof(PatternDictionary) },      { 20, typeof(HalftoneRegion) },
-				{ 22, typeof(HalftoneRegion) },         { 23, typeof(HalftoneRegion) },
-				{ 36, typeof(GenRegion) },				{ 38, typeof(GenRegion) },
-				{ 39, typeof(GenRegion) },				{ 40, typeof(GenRefineRegion) },
-				{ 42, typeof(GenRefineRegion) },		{ 43, typeof(GenRefineRegion) },
-				{ 48, typeof(PageInformation) },        { 50, typeof(EndOfStripe) },
-				{ 52, typeof(SegmentData) },            { 53, typeof(Table) }
-			};
 			internal int segNo, segType, pgAssoc;
 			internal long DataLen, DataStart;
 			private SegmentHeader[] rtSegments;
@@ -2526,10 +2515,19 @@ namespace XPdf {
 			internal SegmentData getSegData() {
 				if (null != segData)
 					return segData;
-				Type segmentClass = SegTypesMap[segType];
-				if (null == segmentClass)
-					throw new ArgumentException("No segment class for type " + segType);
-				segData = Activator.CreateInstance(segmentClass) as SegmentData;
+				switch (segType) {
+					case  0:					segData = new SymbolDictionary();	break;
+					case  4: case  6: case  7:	segData = new TextRegion();			break;
+					case 16:					segData = new PatternDictionary();	break;
+					case 20: case 22: case 23:	segData = new HalftoneRegion();		break;
+					case 36: case 38: case 39:	segData = new GenRegion();			break;
+					case 40: case 42: case 43:	segData = new GenRefineRegion();	break;
+					case 48:					segData = new PageInformation();	break;
+					case 50:					segData = new EndOfStripe();		break;
+					case 52:					segData = new SegmentData();		break;
+					case 53:					segData = new Table();				break;
+					default: throw new ArgumentException("No segment class for type " + segType);
+				}
 				segData.init(this, new ImgStream(imgStrm, DataStart, DataLen));
 				return segData;
 			}
