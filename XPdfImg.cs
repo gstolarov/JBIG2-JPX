@@ -14,10 +14,10 @@ namespace XPdf {
 			internal byte[] cxTab;
 			internal CXStats(int contextSizeA = 512) {
 				cxTab = new byte[contextSizeA];
-				reset();
+				Reset();
 			}
-			internal void reset() { Array.Clear(cxTab, 0, cxTab.Length); }
-			internal void setEntry(uint cx, int i, int mps) {
+			internal void Reset() { Array.Clear(cxTab, 0, cxTab.Length); }
+			internal void SetEntry(uint cx, int i, int mps) {
 				cxTab[cx] = (byte)((i << 1) + mps);
 			}
 		};
@@ -43,18 +43,17 @@ namespace XPdf {
 		};
 		internal ArithmDecoder(MemoryStream str = null) {
 			if (str != null) {
-				setStream(str);
-				start();
+				SetStream(str);
+				Start();
 			}
 		}
-		internal void setStream(MemoryStream strA) { str = strA; dataLen = 0; limitStream = false; }
-		internal void setStream(MemoryStream strA, int dataLenA) { str = strA; dataLen = dataLenA; limitStream = true; }
+		internal void SetStream(MemoryStream strA) { str = strA; dataLen = 0; limitStream = false; }
+		internal void SetStream(MemoryStream strA, int dataLenA) { str = strA; dataLen = dataLenA; limitStream = true; }
 		// Start decoding on a new stream.  This fills the byte buffers and runs INITDEC.
-		internal void start() {
-			buf0 = readByte();
-			buf1 = readByte();
+		internal void Start() {
+			(buf0, buf1) = (ReadByte(), ReadByte());
 			c = (buf0 ^ 0xff) << 16;    // INITDEC
-			byteIn();
+			ByteIn();
 			c <<= 7;
 			ct -= 7;
 			a = 0x80000000;
@@ -63,20 +62,19 @@ namespace XPdf {
 		// buffers if needed, but does not run INITDEC.  (This is used in
 		// JPEG 2000 streams when codeblock data is split across multiple
 		// packets/layers.)
-		internal void restart(int dataLenA) {
+		internal void Restart(int dataLenA) {
 			if (dataLen >= 0)
 				dataLen = dataLenA;
 			else if (dataLen == -1) {
 				dataLen = dataLenA;
-				buf1 = readByte();
+				buf1 = ReadByte();
 			}
 			else {
 				int k = (-dataLen - 1) * 8 - ct, nBits;
 				dataLen = dataLenA;
 				uint cAdd = 0;
-				bool prevFF = false;
-				for (; k > 0;) {
-					buf0 = readByte();
+				for (bool prevFF = false; k > 0; prevFF = buf0 == 0xff) {
+					buf0 = ReadByte();
 					if (prevFF) {
 						cAdd += 0xfe00 - (buf0 << 9);
 						nBits = 7;
@@ -85,7 +83,6 @@ namespace XPdf {
 						cAdd += 0xff00 - (buf0 << 8);
 						nBits = 8;
 					}
-					prevFF = buf0 == 0xff;
 					if (k > nBits) {
 						cAdd <<= nBits;
 						k -= nBits;
@@ -97,82 +94,58 @@ namespace XPdf {
 					}
 				}
 				c += cAdd;
-				buf1 = readByte();
+				buf1 = ReadByte();
 			}
 		}
 		// Read any leftover data in the stream.
-		internal void cleanup() {
+		internal void Cleanup() {
 			if (!limitStream) return;
 			// This saves one extra byte of data from the end of packet i, to be used in packet i+1.
 			// It's not clear from the JPEG 2000 spec exactly how this should work, but this kludge
 			// does seem to fix decode of some problematic JPEG 2000 streams.  It may actually be
 			// necessary to buffer an arbitrary number of bytes (> 1), but I haven't run into that case yet.
-			for (; dataLen > 0; readBuf = (int)readByte())
+			for (; dataLen > 0; readBuf = (int)ReadByte())
 				readBuf = -1;
 		}
-		internal int decodeBit(int context, CXStats stats) {
-			int iCX = stats.cxTab[context] >> 1, mps = stats.cxTab[context] & 1, bit;
+		internal int DecodeBit(int context, CXStats stats) {
+			int ctx = stats.cxTab[context], iCX = ctx >> 1, mps = ctx & 1, bit;
 			uint qe = qeTab[iCX];
+			bool chk;
 			a -= qe;
 			if (c < a) {
 				if (0 != (a & 0x80000000))
-					bit = mps;
-				else {                          // MPS_EXCHANGE
-					if (a < qe) {
-						bit = 1 - mps;
-						stats.cxTab[context] = (byte)((nlpsTab[iCX] << 1)
-									| (0 != switchTab[iCX] ? 1 - mps : mps));
-					}
-					else {
-						bit = mps;
-						stats.cxTab[context] = (byte)((nmpsTab[iCX] << 1) | mps);
-					}
-					do {                        // RENORMD
-						if (ct == 0) byteIn();
-						a <<= 1;
-						c <<= 1;
-						--ct;
-					} while (0 == (a & 0x80000000));
-				}
+					return mps;
+				chk = a < qe;
 			}
 			else {
 				c -= a;                         // LPS_EXCHANGE
-				if (a < qe) {
-					bit = mps;
-					stats.cxTab[context] = (byte)((nmpsTab[iCX] << 1) | mps);
-				}
-				else {
-					bit = 1 - mps;
-					stats.cxTab[context] = (byte)((nlpsTab[iCX] << 1)
-								| (switchTab[iCX] != 0 ? 1 - mps : mps));
-				}
+				chk = a >= qe;
 				a = qe;                         // RENORMD
-				do {
-					if (ct == 0)
-						byteIn();
-					a <<= 1;
-					c <<= 1;
-					--ct;
-				} while (0 == (a & 0x80000000));
 			}
+			if (chk) {
+				bit = 1 - mps;
+				stats.cxTab[context] = (byte)((nlpsTab[iCX] << 1)
+							| (0 != switchTab[iCX] ? bit : mps));
+			}
+			else {
+				bit = mps;
+				stats.cxTab[context] = (byte)((nmpsTab[iCX] << 1) | bit);
+			}
+			do {
+				if (ct == 0) ByteIn();
+				a <<= 1; c <<= 1; --ct;
+			} while (0 == (a & 0x80000000));
 			return bit;
 		}
 		// Returns false for OOB, otherwise sets *<x> and returns true.
-		internal long decodeInt(CXStats stats) {
-			int ret = 0;
-			if (!decodeInt(ref ret, stats))
-				return long.MaxValue;
-			return ret;
-		}
-		internal bool decodeInt(ref int x, CXStats stats) {
+		internal long DecodeInt(CXStats stats) {
 			prev = 1;
-			int v, i, a;
-			int s = decodeIntBit(stats) == 0 ? 1 : -1;
-			if (0 != decodeIntBit(stats))
-				if (0 != decodeIntBit(stats))
-					if (0 != decodeIntBit(stats))
-						if (0 != decodeIntBit(stats))
-							(i, a) = (0 != decodeIntBit(stats))
+			int s = DecodeIntBit(stats) == 0 ? 1 : -1, v, i, a;
+			if (0 != DecodeIntBit(stats))
+				if (0 != DecodeIntBit(stats))
+					if (0 != DecodeIntBit(stats))
+						if (0 != DecodeIntBit(stats))
+							(i, a) = (0 != DecodeIntBit(stats))
 								? (32, 4436) : (12, 340);
 						else
 							(i, a) = (8, 84);
@@ -183,22 +156,21 @@ namespace XPdf {
 			else
 				(i, a) = (2, 0);
 			for (v = 0; i > 0; --i)
-				v = (v << 1) | decodeIntBit(stats);
+				v = (v << 1) | DecodeIntBit(stats);
 			v += a;
 			if (s != 1 && v == 0)
-				return false;
-			x = s * v;
-			return true;
+				return long.MaxValue;
+			return s * v;
 		}
-		internal uint decodeIAID(int codeLen, CXStats stats) {
+		internal uint DecodeIAID(int codeLen, CXStats stats) {
 			prev = 1;
 			for (int i = 0; i < codeLen; ++i) {
-				int bit = decodeBit((int)prev, stats);
+				int bit = DecodeBit((int)prev, stats);
 				prev = (uint)(((int)prev << 1) | bit);
 			}
 			return (uint)(prev - (1 << codeLen));
 		}
-		uint readByte() {
+		uint ReadByte() {
 			if (limitStream) {
 				if (readBuf >= 0) {
 					uint x = (uint)readBuf;
@@ -211,29 +183,27 @@ namespace XPdf {
 			}
 			return (uint)str.ReadByte() & 0xff;
 		}
-		int decodeIntBit(CXStats stats) {
-			int bit = decodeBit((int)prev, stats);
+		int DecodeIntBit(CXStats stats) {
+			int bit = DecodeBit((int)prev, stats);
 			prev = (uint)((prev < 0x100) ? ((int)prev << 1) | bit
 						: ((((int)prev << 1) | bit) & 0x1ff) | 0x100);
 			return bit;
 		}
-		void byteIn() {
-			if (buf0 == 0xff) {
-				if (buf1 > 0x8f) {
-					if (limitStream) {
-						(buf0, buf1) = (buf1, readByte());
-						c += 0xff00 - (buf0 << 8);
-					}
-					ct = 8;
-				}
-				else {
-					(buf0, buf1, ct) = (buf1, readByte(), 7);
-					c += 0xfe00 - (buf0 << 9);
-				}
+		void ByteIn() {
+			if (buf0 != 0xff) {
+				(buf0, buf1, ct) = (buf1, ReadByte(), 8);
+				c += 0xff00 - (buf0 << 8);
+			}
+			else if (buf1 <= 0x8f) {
+				(buf0, buf1, ct) = (buf1, ReadByte(), 7);
+				c += 0xfe00 - (buf0 << 9);
 			}
 			else {
-				(buf0, buf1, ct) = (buf1, readByte(), 8);
-				c += 0xff00 - (buf0 << 8);
+				if (limitStream) {
+					(buf0, buf1) = (buf1, ReadByte());
+					c += 0xff00 - (buf0 << 8);
+				}
+				ct = 8;
 			}
 		}
 		uint buf0, buf1, c, a, prev;         // for the integer decoder
@@ -242,23 +212,20 @@ namespace XPdf {
 		bool limitStream = false;
 	};
 	internal class ImgStream : MemoryStream {
-		byte[] orgData;
-		internal long startPos = 0, bitBuf = 0, bitAvl = 0;
-		public ImgStream(byte[] data) : base(data) {
-			orgData = data;
+		long bitBuf = 0, bitAvl = 0;
+		public ImgStream(byte[] data, int off = 0, int len = -1) 
+				: base(data, off, len < 0 ? data.Length - off : len, false, true) {
 		}
 		public ImgStream(ImgStream oth, long off, long len)
-				: base(oth.orgData, (int)(oth.startPos + off), (int)len) {
-			orgData = oth.orgData;
-			startPos = oth.startPos + off;
+				: base(oth.GetBuffer(), (int)off, (int)len, false, true) {
 		}
-		public sbyte readSByte() {
+		public sbyte ReadSByte() {
 			bitAvl = 0;
 			int ch = ReadByte();
 			if (ch < 0) throw new EndOfStreamException();
 			return (sbyte)ch;
 		}
-		public int readInt(int n = 4) {
+		public int ReadInt(int n = 4) {
 			if (EOF(n - 1))
 				return -1; // throw new EndOfStreamException();
 			bitAvl = 0;
@@ -267,7 +234,7 @@ namespace XPdf {
 				ret = ret << 8 | ReadByte();
 			return ret;
 		}
-		public int readBits(int numBits) {
+		public int ReadBits(int numBits) {
 			if (numBits == 0) return 0;
 			for (; bitAvl < numBits; bitAvl += 8)
 				bitBuf = bitBuf << 8 | (long)ReadByte();
@@ -275,30 +242,20 @@ namespace XPdf {
 			bitAvl -= numBits;
 			return (int)ret;
 		}
-		public void Seek(long pos) {
+		public override long Seek(long pos, SeekOrigin loc) {
 			bitAvl = 0;
-			base.Seek(pos, SeekOrigin.Begin);
-		}
-		public void skipBits() {
-			bitAvl = 0;
+			return base.Seek(pos, loc);
 		}
 		public bool EOF(int n = 0) {
 			return Position + n >= Length;
 		}
-		public long RealPos => Position + startPos;
 	}
 	public class XPdfStream {
 		internal ImgStream bufStr = null;      // buffered stream (for lookahead)
-		internal bool readByte(ref int x) {
-			int c = bufStr.ReadByte();
-			if (c == -1) return false;
-			x = (sbyte)c;
-			return true;
-		}
 		internal int GetInt(int nBytes) {
-			return bufStr.readInt(nBytes);
+			return bufStr.ReadInt(nBytes);
 		}
-		internal static bool error(string msg, bool fatal = true) {
+		internal static bool Error(string msg, bool fatal = true) {
 			if (fatal) throw new Exception(msg);
 #if SA_TEST
 			else Console.WriteLine(msg);
@@ -314,6 +271,7 @@ namespace XPdf {
 			internal int off;
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal ArrayPtr(T[] b = null, int o = 0) { data = b; off = o; }
+			internal ArrayPtr(ArrayPtr<T> v) { data = v.data; off = v.off; }
 			internal T this[int i] {
 				[MethodImpl(MethodImplOptions.AggressiveInlining)]
 				get { return data[off + i]; }
@@ -370,23 +328,23 @@ namespace XPdf {
 			internal JPXCodeBlock[] cbs;            //----- children the code-blocks (len = nXCBs * nYCBs)
 		};
 		class JPXPrecinct {
-			internal JPXSubband[] subbands = null;       //----- children the subbands
+			internal JPXSubband[] subbands = null;  //----- children the subbands
 		};
 		class JPXResLevel {
 			//----- from the COD and COC segments (main and tile)
 			internal int precinctWidth = 15, precinctHeight = 15;  // log2(precinct width/height)
-																   //----- computed
-			internal int x0, y0, x1, y1;                            // bounds of this tile-comp at this res level
-			internal int[] bx0 = new int[3], by0 = new int[3],      // subband bounds
+			//----- computed
+			internal int x0, y0, x1, y1;                        // bounds of this tile-comp at this res level
+			internal int[] bx0 = new int[3], by0 = new int[3],  // subband bounds
 						   bx1 = new int[3], by1 = new int[3];
-			internal int codeBlockW, codeBlockH;                    // log2(code-block width/height)
-			internal int cbW, cbH;                                  // code-block width/height
+			internal int codeBlockW, codeBlockH;                // log2(code-block width/height)
+			internal int cbW, cbH;                              // code-block width/height
 			internal bool empty;            // true if all subbands and precincts are zero width or height
-			internal JPXPrecinct[] precincts = null; //---- children the precincts
+			internal JPXPrecinct[] precincts = null;			//---- children the precincts
 		};
 		class JPXTileComp {
 			//----- from the SIZ segment
-			internal bool sgned;           // 1 for signed, 0 for unsigned
+			internal bool sgned;					// 1 for signed, 0 for unsigned
 			internal int prec;                      // precision, in bits
 			internal int hSep, vSep;                // hor/vert separation of samples
 
@@ -410,9 +368,9 @@ namespace XPdf {
 			}
 			internal void Init(JPXTileComp tmpTile) {
 				if (tmpTile.nDecompLevels < 1 || tmpTile.nDecompLevels > 31
-				|| tmpTile.codeBlockW > 10 || tmpTile.codeBlockH > 10
-				|| tmpTile.transform == -1)
-					error("Error in JPX COD marker segment");
+				||  tmpTile.codeBlockW > 10 || tmpTile.codeBlockH > 10
+				||  tmpTile.transform == -1)
+					Error("Error in JPX COD marker segment");
 				style = tmpTile.style;
 				nDecompLevels = tmpTile.nDecompLevels;
 				codeBlockW = tmpTile.codeBlockW;
@@ -424,20 +382,17 @@ namespace XPdf {
 					resLevels[r].precincts = null;
 			}
 			internal void InitResLvels(XPdfJpx jpx) {
-				for (int r = 0, sz; r <= nDecompLevels; ++r) {
+				for (int r = 0, sz; r <= nDecompLevels; ++r) 
 					if (0 != (style & 0x01)) {
-						if ((sz = jpx.GetInt(1)) == -1)
-							error("Error in JPX COD marker segment");
+						if ((sz = jpx.bufStr.ReadInt(1)) == -1)
+							Error("Error in JPX COD marker segment");
 						if (r > 0 && ((sz & 0x0f) == 0 || (sz & 0xf0) == 0))
-							error("Invalid precinct size in JPX COD marker segment");
+							Error("Invalid precinct size in JPX COD marker segment");
 						resLevels[r].precinctWidth = sz & 0x0f;
 						resLevels[r].precinctHeight = (sz >> 4) & 0x0f;
 					}
-					else {
-						resLevels[r].precinctWidth = 15;
-						resLevels[r].precinctHeight = 15;
-					}
-				}
+					else 
+						resLevels[r].precinctWidth = resLevels[r].precinctHeight = 15;
 			}
 			internal void InitQuantSteps(XPdfJpx jpx, int segLen) {
 				int nQuantSteps = 0;
@@ -448,11 +403,11 @@ namespace XPdf {
 				else if ((quantStyle & 0x1f) == 0x02)
 					nQuantSteps = segLen / 2;
 				if (nQuantSteps < 1)
-					error("Error in JPX QCD marker segment");
+					Error("Error in JPX QCD marker segment");
 				ReAlloc(ref quantSteps, nQuantSteps);
 				for (int i = 0; i < nQuantSteps; ++i)
-					if ((quantSteps[i] = jpx.GetInt(1)) == -1)
-						error("Error in JPX QCD marker segment");
+					if ((quantSteps[i] = jpx.bufStr.ReadInt(1)) == -1)
+						Error("Error in JPX QCD marker segment");
 			}
 		};
 		class JPXTile {
@@ -477,12 +432,12 @@ namespace XPdf {
 			internal JPXTileComp[] tileComps = null;// the tile-components (len = JPXImage.nComps)
 		};
 		class JPXImage {                            //----- from the SIZ segment
-			internal int xSize, ySize;              // size of reference grid
-			internal int xOffset, yOffset;          // image offset
+			internal int xSize,		ySize;          // size of reference grid
+			internal int xOffset,	yOffset;        // image offset
 			internal int xTileSize, yTileSize;      // size of tiles
-			internal int xTileOffset, yTileOffset;  // offset of first tile
+			internal int xTileOff,	yTileOff;		// offset of first tile
+			internal int nXTiles,	nYTiles;        // number of tiles in x/y direction
 			internal int nComps;                    // number of components
-			internal int nXTiles, nYTiles;          // number of tiles in x/y direction
 			internal JPXTile[] tiles = null;        // the tiles (len = nXTiles * nYTiles)
 		};
 
@@ -511,19 +466,13 @@ namespace XPdf {
 		// where horiz/vert are offset by 2 (i.e., range is -2 .. 2)
 		// and k = 0 for the context
 		//       = 1 for the xor bit
-		static int[][][] signContext = new int[][][] {
+		static readonly int[][][] signContext = new int[][][] {
 			new int[][]{new int[]{13,1},new int[]{13,1},new int[]{12,1},new int[]{11,1},new int[]{11,1}},
 			new int[][]{new int[]{13,1},new int[]{13,1},new int[]{12,1},new int[]{11,1},new int[]{11,1}},
 			new int[][]{new int[]{10,1},new int[]{10,1},new int[]{ 9,0},new int[]{10,0},new int[]{10,0}},
 			new int[][]{new int[]{11,0},new int[]{11,0},new int[]{12,0},new int[]{13,0},new int[]{13,0}},
 			new int[][]{new int[]{11,0},new int[]{11,0},new int[]{12,0},new int[]{13,0},new int[]{13,0}},
 		};
-
-		// constants used in the IDWT
-		const double idwtAlpha = -1.586134342059924, idwtBeta = -0.052980118572961,
-			idwtGamma = 0.882911075530934, idwtDelta = 0.443506852043971,
-			idwtKappa = 1.230174104914001, idwtIKappa = (1.0 / idwtKappa);
-
 		// sum of the sample size (number of bits) and the number of bits to
 		// the right of the decimal point for the fixed point arithmetic used
 		// in the IDWT
@@ -536,7 +485,7 @@ namespace XPdf {
 		}
 		public Image decodeImage(byte[] gsPlt = null) {
 			bufStr.Position = 0;
-			readBoxes();
+			ReadBoxes();
 			int nComps = (havePalette ? palette.nComps : img.nComps);
 			if (nComps != 3 && nComps != 1) throw new Exception("invalid format");
 			Bitmap bmp = new Bitmap(img.xSize, img.ySize, PixelFormat.Format24bppRgb);
@@ -546,8 +495,8 @@ namespace XPdf {
 			for (int curY = img.yOffset; curY < img.ySize; curY++) {
 				Array.Clear(buf, 0, buf.Length);
 				for (int curX = img.xOffset; curX < img.xSize; curX++) {
-					var tile = img.tiles[((curY - img.yTileOffset) / img.yTileSize * img.nXTiles
-											+ (curX - img.xTileOffset) / img.xTileSize)];
+					var tile = img.tiles[((curY - img.yTileOff) / img.yTileSize * img.nXTiles
+											+ (curX - img.xTileOff) / img.xTileSize)];
 					for (int curComp = 0; curComp < nComps; curComp++) {
 						JPXTileComp tileComp = tile.tileComps[havePalette ? 0 : curComp];
 						int pix = tileComp.data[Math.Max(0, curY / tileComp.vSep - tileComp.y0) * tileComp.w
@@ -558,7 +507,7 @@ namespace XPdf {
 						if (nComps != 1)
 							buf[curX * nComps + (2 - curComp)] = (byte)pix;
 						else if (pix != 0) {
-							pix = gsPlt == null ? 255   // use just pix for grayscale!!!!!
+							pix = gsPlt == null ? 255   // pix ?
 									: ((gsPlt.Length > 256) ? gsPlt[pix * 3] : gsPlt[pix]);
 							buf[curX*3] = buf[curX*3+1] = buf[curX*3+2] = (byte)pix;
 						}
@@ -586,34 +535,34 @@ namespace XPdf {
 				a[i] = new T();
 			return a;
 		}
-		void readBoxes() {
+		void ReadBoxes() {
 			int boxType = 0, boxLen = 0, dataLen = 0, compression;
-			if (new int[] { 0x0c, 0x6a502020, 0x0d0a870a }.Any(x => x != GetInt(4)))
-				error("File is neither valid JP2 file nor valid JPEG 2000 codestream");
+			if (new int[] { 0x0c, 0x6a502020, 0x0d0a870a }.Any(x => x != bufStr.ReadInt(4)))
+				Error("File is neither valid JP2 file nor valid JPEG 2000 codestream");
 			var dataStart = bufStr.Position;
-			for (; readBoxHdr(ref boxType, ref boxLen, ref dataLen); bufStr.Position = dataStart + dataLen) {
+			for (; ReadBoxHdr(ref boxType, ref boxLen, ref dataLen); bufStr.Position = dataStart + dataLen) {
 				dataStart = bufStr.Position;
 				switch (boxType) {
 					case 0x69686472:                // image header
-						bufStr.Position += 8; nComps = GetInt(2);
-						bufStr.Position += 1; compression = GetInt(1);
+						bufStr.Position += 8; nComps = bufStr.ReadInt(2);
+						bufStr.Position += 1; compression = bufStr.ReadInt(1);
 						if (compression != 7 || nComps < 1 || bufStr.EOF())
-							error("Bad header info");
+							Error("Bad header info");
 						break;
 					case 0x70636c72:        // palette
 						if ((palette.nEntries = GetInt(2)) == -1 || (palette.nComps = GetInt(1)) == -1)
-							error("Unexpected EOF in JPX stream");
+							Error("Unexpected EOF in JPX stream");
 						havePalette = true;
 						palette.bpc = new uint[palette.nComps];
 						palette.c = new int[palette.nEntries * palette.nComps];
 						for (int i = 0; i < palette.nComps; ++i)
-							palette.bpc[i] = (uint)GetInt(1) + 1;
+							palette.bpc[i] = (uint)bufStr.ReadInt(1) + 1;
 						for (int i = 0; i < palette.nEntries; ++i)
 							for (int j = 0; j < palette.nComps; ++j)
 								palette.c[i * palette.nComps + j] = GetInt((((int)palette.bpc[j] & 0x7f) + 7) >> 3);
 						break;
 					case 0x6A703263:        // contiguous codestream
-						readCodestream();
+						ReadCodestream();
 						dataStart = bufStr.Position; dataLen = 0;
 						break;
 					case 0x6a703268:        // JP2 header
@@ -630,41 +579,40 @@ namespace XPdf {
 				}
 			}
 		}
-		void readCodestream() {
+		void ReadCodestream() {
 			bool haveSIZ = false, haveCOD = false, haveQCD = false, haveSOT = false;
 			int segType = 0, progOrder, multiComp, style, nLayers, segLen = 0, capabilities, comp, i, r;
 			JPXTileComp tmpTile;
 			do {                //----- main header
-				if (!readMarkerHdr(ref segType, ref segLen))
-					error("Error in JPX codestream");
+				ReadMarkerHdr(ref segType, ref segLen);
 				switch (segType) {
 					case 0x4f: break;   // SOC - start of codestream
 					case 0x51:          // SIZ - image and tile size
-						capabilities = GetInt(2);
+						capabilities = bufStr.ReadInt(2);
 						(img.xSize, img.ySize, img.xOffset, img.yOffset) = (GetInt(4), GetInt(4), GetInt(4), GetInt(4));
-						(img.xTileSize, img.yTileSize, img.xTileOffset, img.yTileOffset) = (GetInt(4), GetInt(4), GetInt(4), GetInt(4));
+						(img.xTileSize, img.yTileSize, img.xTileOff, img.yTileOff) = (GetInt(4), GetInt(4), GetInt(4), GetInt(4));
 						if (haveSIZ || (img.nComps = GetInt(2)) == -1 || nComps != 0 && img.nComps != nComps
 						|| img.xSize == 0 || img.ySize == 0
 						|| img.xOffset >= img.xSize || img.yOffset >= img.ySize
 						|| img.xTileSize == 0 || img.yTileSize == 0
-						|| img.xTileOffset > img.xOffset || img.yTileOffset > img.yOffset
-						|| img.xTileSize + img.xTileOffset <= img.xOffset
-						|| img.yTileSize + img.yTileOffset <= img.yOffset || img.nComps == 0)
-							error("Error in JPX SIZ marker segment");
-						img.nXTiles = (img.xSize - img.xTileOffset + img.xTileSize - 1) / img.xTileSize;
-						img.nYTiles = (img.ySize - img.yTileOffset + img.yTileSize - 1) / img.yTileSize;
+						|| img.xTileOff > img.xOffset || img.yTileOff > img.yOffset
+						|| img.xTileSize + img.xTileOff <= img.xOffset
+						|| img.yTileSize + img.yTileOff <= img.yOffset || img.nComps == 0)
+							Error("Error in JPX SIZ marker segment");
+						img.nXTiles = (img.xSize - img.xTileOff + img.xTileSize - 1) / img.xTileSize;
+						img.nYTiles = (img.ySize - img.yTileOff + img.yTileSize - 1) / img.yTileSize;
 						// check for overflow before allocating memory
 						if (img.nXTiles <= 0 || img.nYTiles <= 0 || img.nXTiles >= int.MaxValue / img.nYTiles)
-							error("Bad tile count in JPX SIZ marker segment");
+							Error("Bad tile count in JPX SIZ marker segment");
 						img.tiles = Alloc<JPXTile>((img.nXTiles * img.nYTiles));
 						for (i = 0; i < img.nXTiles * img.nYTiles; ++i)
 							img.tiles[i].tileComps = Alloc<JPXTileComp>(img.nComps);
 						for (comp = 0; comp < img.nComps; ++comp) {
-							img.tiles[0].tileComps[comp].prec = (sbyte)GetInt(1);
-							img.tiles[0].tileComps[comp].hSep = GetInt(1);
-							img.tiles[0].tileComps[comp].vSep = GetInt(1);
+							img.tiles[0].tileComps[comp].prec = (sbyte)bufStr.ReadInt(1);
+							img.tiles[0].tileComps[comp].hSep = bufStr.ReadInt(1);
+							img.tiles[0].tileComps[comp].vSep = bufStr.ReadInt(1);
 							if (img.tiles[0].tileComps[comp].hSep < 1 || img.tiles[0].tileComps[comp].vSep < 1)
-								error("Error in JPX SIZ marker segment");
+								Error("Error in JPX SIZ marker segment");
 							img.tiles[0].tileComps[comp].sgned = 0 != (img.tiles[0].tileComps[comp].prec & 0x80);
 							img.tiles[0].tileComps[comp].prec = (img.tiles[0].tileComps[comp].prec & 0x7f) + 1;
 							for (i = 1; i < img.nXTiles * img.nYTiles; ++i)
@@ -676,11 +624,11 @@ namespace XPdf {
 						(style, progOrder, nLayers, multiComp)
 							= (GetInt(1), GetInt(1), GetInt(2), GetInt(1));
 						if (!haveSIZ || multiComp == -1)
-							error("Error in JPX COD marker segment");
+							Error("Error in JPX COD marker segment");
 						tmpTile = new JPXTileComp {
-							style = style, nDecompLevels = GetInt(1),
-							codeBlockW = GetInt(1) + 2, codeBlockH = GetInt(1) + 2,
-							codeBlockStyle = GetInt(1), transform = GetInt(1)
+							style = style, nDecompLevels = bufStr.ReadInt(1),
+							codeBlockW = bufStr.ReadInt(1) + 2, codeBlockH = bufStr.ReadInt(1) + 2,
+							codeBlockStyle = bufStr.ReadInt(1), transform = bufStr.ReadInt(1)
 						};
 						for (i = 0; i < img.nXTiles * img.nYTiles; ++i) {
 							img.tiles[i].progOrder = progOrder;
@@ -704,11 +652,11 @@ namespace XPdf {
 					case 0x53:          // COC - coding style component
 						(comp, style) = (GetInt(img.nComps > 256 ? 2 : 1), GetInt(1));
 						if (!haveCOD || comp >= img.nComps || style == -1)
-							error("Error in JPX COC marker segment");
-						tmpTile = new JPXTileComp { nDecompLevels = GetInt(1),
+							Error("Error in JPX COC marker segment");
+						tmpTile = new JPXTileComp { nDecompLevels = bufStr.ReadInt(1),
 							style = (img.tiles[0].tileComps[comp].style & ~1) | (style & 1),
-							codeBlockW = GetInt(1) + 2, codeBlockH = GetInt(1) + 2,
-							codeBlockStyle = GetInt(1), transform = GetInt(1)
+							codeBlockW = bufStr.ReadInt(1) + 2, codeBlockH = bufStr.ReadInt(1) + 2,
+							codeBlockStyle = bufStr.ReadInt(1), transform = bufStr.ReadInt(1)
 						};
 						for (i = 0; i < img.nXTiles * img.nYTiles; ++i)
 							img.tiles[i].tileComps[comp].Init(tmpTile);
@@ -722,7 +670,7 @@ namespace XPdf {
 							}
 						break;
 					case 0x5c:          // QCD - quantization default
-						img.tiles[0].tileComps[0].quantStyle = GetInt(1);
+						img.tiles[0].tileComps[0].quantStyle = bufStr.ReadInt(1);
 						img.tiles[0].tileComps[0].InitQuantSteps(this, segLen - 3);
 						for (i = 0; i < img.nXTiles * img.nYTiles; ++i)
 							for (comp = 0; comp < img.nComps; ++comp)
@@ -734,9 +682,9 @@ namespace XPdf {
 						break;
 					case 0x5d:          // QCC - quantization component
 						if (!haveQCD)
-							error("JPX QCC marker segment before QCD segment");
-						comp = GetInt(img.nComps > 256 ? 2 : 1);
-						img.tiles[0].tileComps[comp].quantStyle = (sbyte)GetInt(1);
+							Error("JPX QCC marker segment before QCD segment");
+						comp = bufStr.ReadInt(img.nComps > 256 ? 2 : 1);
+						img.tiles[0].tileComps[comp].quantStyle = (sbyte)bufStr.ReadInt(1);
 						img.tiles[0].tileComps[comp].InitQuantSteps(this, segLen - (img.nComps > 256 ? 5 : 4));
 						for (i = 1; i < img.nXTiles * img.nYTiles; ++i) {
 							img.tiles[i].tileComps[comp].quantStyle = img.tiles[0].tileComps[comp].quantStyle;
@@ -759,28 +707,27 @@ namespace XPdf {
 						break;
 				}
 			} while (!haveSOT);
-			if (!haveSIZ) error("Missing SIZ marker segment in JPX stream");
-			if (!haveCOD) error("Missing COD marker segment in JPX stream");
-			if (!haveQCD) error("Missing QCD marker segment in JPX stream");
+			if (!haveSIZ) Error("Missing SIZ marker segment in JPX stream");
+			if (!haveCOD) Error("Missing COD marker segment in JPX stream");
+			if (!haveQCD) Error("Missing QCD marker segment in JPX stream");
 			//----- read the tile-parts
 			for (segType = 0x90; segType == 0x90;) { // SOT - start of tile
-				readTilePart();
-				if (!readMarkerHdr(ref segType, ref segLen))
-					error("Error in JPX codestream");
+				ReadTilePart();
+				ReadMarkerHdr(ref segType, ref segLen);
 			}
 			if (segType != 0xd9)        // EOC - end of codestream
-				error("Missing EOC marker in JPX codestream");
+				Error("Missing EOC marker in JPX codestream");
 			//----- finish decoding the image
 			for (i = 0; i < img.nXTiles * img.nYTiles; ++i) {
 				JPXTile tile = img.tiles[i];
 				if (!tile.init)
-					error("Uninitialized tile in JPX codestream");
+					Error("Uninitialized tile in JPX codestream");
 				for (comp = 0; comp < img.nComps; ++comp)
-					inverseTransform(tile.tileComps[comp]);
-				inverseMultiCompAndDC(tile);
+					InverseTransform(tile.tileComps[comp]);
+				InverseMultiCompAndDC(tile);
 			}
 		}
-		void readTilePart() {
+		void ReadTilePart() {
 			int tileIdx, tilePartIdx, nTileParts, progOrder, multiComp, cbX, cbY,
 				qStyle, nLayers, preCol0, preCol1, preRow0, preRow1, preCol, preRow, style,
 				nx, ny, nSBs, comp, segLen = 0, i, j, r, sb, n, segType = 0, level, tilePartLen;
@@ -789,27 +736,26 @@ namespace XPdf {
 			(tileIdx, tilePartLen, tilePartIdx, nTileParts) = (GetInt(2), GetInt(4), GetInt(1), GetInt(1));
 			// check tileIdx and tilePartIdx
 			// (this ignores nTileParts, because some encoders get it wrong)
-			if (nTileParts == -1
-			|| tileIdx >= img.nXTiles * img.nYTiles || tilePartIdx != img.tiles[tileIdx].nextTilePart
+			if (nTileParts == -1 || tileIdx >= img.nXTiles * img.nYTiles 
+			|| tilePartIdx != img.tiles[tileIdx].nextTilePart
 			|| (tilePartIdx > 0 && !img.tiles[tileIdx].init)
 			|| (tilePartIdx == 0 && img.tiles[tileIdx].init))
-				error("Weird tile-part header in JPX stream");
+				Error("Weird tile-part header in JPX stream");
 			++img.tiles[tileIdx].nextTilePart;
 			bool tilePartToEOC = tilePartLen == 0, haveSOD = false;
 			tilePartLen -= 12; // subtract size of SOT segment
 			do {
-				if (!readMarkerHdr(ref segType, ref segLen))
-					error("Error in JPX tile-part codestream");
+				ReadMarkerHdr(ref segType, ref segLen);
 				tilePartLen -= 2 + segLen;
 				switch (segType) {
 					case 0x52:          // COD - coding style default
 						(style, progOrder, nLayers, multiComp)
 							= (GetInt(1), GetInt(1), GetInt(2), GetInt(1));
 						if (tilePartIdx != 0 || multiComp == -1)
-							error("Error in JPX COD marker segment");
-						tmpTile = new JPXTileComp { style = style, nDecompLevels = GetInt(1),
-							codeBlockW = GetInt(1) + 2, codeBlockH = GetInt(1) + 2,
-							codeBlockStyle = GetInt(1), transform = GetInt(1)
+							Error("Error in JPX COD marker segment");
+						tmpTile = new JPXTileComp { style = style, nDecompLevels = bufStr.ReadInt(1),
+							codeBlockW = bufStr.ReadInt(1) + 2, codeBlockH = bufStr.ReadInt(1) + 2,
+							codeBlockStyle = bufStr.ReadInt(1), transform = bufStr.ReadInt(1)
 						};
 						img.tiles[tileIdx].progOrder = progOrder;
 						img.tiles[tileIdx].nLayers = nLayers;
@@ -828,7 +774,7 @@ namespace XPdf {
 					case 0x53:          // COC - coding style component
 						(comp, style) = (GetInt(img.nComps > 256 ? 2 : 1), GetInt(1));
 						if (comp >= img.nComps || style == -1 || tilePartIdx != 0)
-							error("Error in JPX COC marker segment");
+							Error("Error in JPX COC marker segment");
 						tmpTile = new JPXTileComp { nDecompLevels = GetInt(1),
 							style = (img.tiles[tileIdx].tileComps[comp].style & ~1) | (style & 1),
 							codeBlockW = GetInt(1) + 2, codeBlockH = GetInt(1) + 2,
@@ -846,10 +792,10 @@ namespace XPdf {
 						break;
 					case 0x5d:          // QCC - quantization component
 						if (tilePartIdx != 0)
-							error("Extraneous JPX QCC marker segment");
+							Error("Extraneous JPX QCC marker segment");
 						if ((comp = GetInt(img.nComps > 256 ? 2 : 1)) == -1 || comp >= img.nComps
-						|| !readByte(ref img.tiles[tileIdx].tileComps[comp].quantStyle))
-							error("Error in JPX QCC marker segment");
+						|| (img.tiles[tileIdx].tileComps[comp].quantStyle = GetInt(1)) == -1)
+							Error("Error in JPX QCC marker segment");
 						img.tiles[tileIdx].tileComps[comp].InitQuantSteps(this, segLen - (img.nComps > 256 ? 5 : 4));
 						break;
 					case 0x93:          // SOD - start of data
@@ -862,7 +808,7 @@ namespace XPdf {
 					case 0x64:          // COM - comment
 					default:
 						if (segLen > 2) bufStr.Position += segLen - 2;
-						error("Error in JPX marker segment " + segType);
+						Error("Error in JPX marker segment " + segType);
 						break;
 				}
 			} while (!haveSOD);
@@ -870,18 +816,18 @@ namespace XPdf {
 				JPXTileComp tileComp = img.tiles[tileIdx].tileComps[comp];
 				qStyle = tileComp.quantStyle & 0x1f;
 				if ((qStyle == 0 && tileComp.quantSteps.Length < 3 * tileComp.nDecompLevels + 1)
-				|| (qStyle == 1 && tileComp.quantSteps.Length < 1)
-				|| (qStyle == 2 && tileComp.quantSteps.Length < 3 * tileComp.nDecompLevels + 1))
-					error("Too few quant steps in JPX tile part");
+				||  (qStyle == 1 && tileComp.quantSteps.Length < 1)
+				||  (qStyle == 2 && tileComp.quantSteps.Length < 3 * tileComp.nDecompLevels + 1))
+					Error("Too few quant steps in JPX tile part");
 			}
 			//----- initialize the tile, precincts, and code-blocks
 			if (tilePartIdx == 0) {
 				JPXTile tile = img.tiles[tileIdx];
 				(i, j) = (tileIdx / img.nXTiles, tileIdx % img.nXTiles);
-				tile.x0 = Math.Max(img.xOffset, img.xTileOffset + j * img.xTileSize);
-				tile.y0 = Math.Max(img.yOffset, img.yTileOffset + i * img.yTileSize);
-				tile.x1 = Math.Min(img.xSize, img.xTileOffset + (j + 1) * img.xTileSize);
-				tile.y1 = Math.Min(img.ySize, img.yTileOffset + (i + 1) * img.yTileSize);
+				tile.x0 = Math.Max(img.xOffset, img.xTileOff + j * img.xTileSize);
+				tile.y0 = Math.Max(img.yOffset, img.yTileOff + i * img.yTileSize);
+				tile.x1 = Math.Min(img.xSize, img.xTileOff + (j + 1) * img.xTileSize);
+				tile.y1 = Math.Min(img.ySize, img.yTileOff + (i + 1) * img.yTileSize);
 				tile.done = false;
 				tile.maxNDecompLevels = tile.maxNPrecincts = tile.comp
 						= tile.res = tile.precinct = tile.layer = 0;
@@ -896,7 +842,7 @@ namespace XPdf {
 					tileComp.w = tileComp.x1 - tileComp.x0;
 					tileComp.h = tileComp.y1 - tileComp.y0;
 					if (tileComp.w == 0 || tileComp.h == 0 || tileComp.w > int.MaxValue / tileComp.h)
-						error("Invalid tile size or sample separation in JPX stream");
+						Error("Invalid tile size or sample separation in JPX stream");
 					tileComp.data = new int[tileComp.w * tileComp.h];
 					n = Math.Max(tileComp.x1 - tileComp.x0, tileComp.y1 - tileComp.y0);
 					tileComp.buf = new int[n + 8];
@@ -976,9 +922,9 @@ namespace XPdf {
 										sbCoeffs = ((resLevel.by1[0] - resLevel.by0[0]) * tileComp.w
 												  + (resLevel.bx1[1] - resLevel.bx0[1]));
 									int cbCol0 = jpxFloorDivPow2(px0, resLevel.codeBlockW);
-									int cbCol1 = jpxCeilDivPow2(px1, resLevel.codeBlockW);
+									int cbCol1 = jpxCeilDivPow2(px1,  resLevel.codeBlockW);
 									int cbRow0 = jpxFloorDivPow2(py0, resLevel.codeBlockH);
-									int cbRow1 = jpxCeilDivPow2(py1, resLevel.codeBlockH);
+									int cbRow1 = jpxCeilDivPow2(py1,  resLevel.codeBlockH);
 									subband.nXCBs = cbCol1 - cbCol0;
 									subband.nYCBs = cbRow1 - cbRow0;
 									n = Math.Max(subband.nXCBs, subband.nYCBs);
@@ -1020,9 +966,9 @@ namespace XPdf {
 				}
 				tile.init = true;
 			}
-			readTilePartData(tileIdx, tilePartLen, tilePartToEOC);
+			ReadTilePartData(tileIdx, tilePartLen, tilePartToEOC);
 		}
-		void readTilePartData(int tileIdx, int tilePartLen, bool tilePartToEOC) {
+		void ReadTilePartData(int tileIdx, int tilePartLen, bool tilePartToEOC) {
 			int bits = 0, nx, ny, cbX, cbY, sb, j, i, ttVal, level, n;
 			JPXTile tile = img.tiles[tileIdx];
 			for (; true;) {         // read all packets from this tile-part
@@ -1036,11 +982,11 @@ namespace XPdf {
 				if (resLevel.empty)
 					goto nextPacket;
 				//----- packet header
-				startBitBuf(tilePartLen);               // setup
+				StartBitBuf(tilePartLen);               // setup
 				if (0 != (tileComp.style & 0x02))
-					skipSOP();
-				if (!readBits(1, ref bits))             // zero-length flag
-					error("Error in JPX stream");
+					SkipSOP();
+				if (!ReadBits(1, ref bits))             // zero-length flag
+					Error("Error in JPX stream");
 				if (0 == bits)      // packet is empty -- clear all code-block inclusion flags
 					for (sb = 0; sb < (tile.res == 0 ? 1 : 3); ++sb) {
 						JPXSubband subband = precinct.subbands[sb];
@@ -1059,8 +1005,8 @@ namespace XPdf {
 									continue;
 								}
 								if (cb.seen) {              // code-block inclusion
-									if (!readBits(1, ref cb.included))
-										error("Error in JPX stream");
+									if (!ReadBits(1, ref cb.included))
+										Error("Error in JPX stream");
 								}
 								else {
 									for (ttVal = i = 0, level = subband.maxTTLevel; level >= 0; --level) {
@@ -1072,8 +1018,8 @@ namespace XPdf {
 										else
 											ttVal = subband.inclusion[j].val;
 										while (!subband.inclusion[j].finished && ttVal <= tile.layer) {
-											if (!readBits(1, ref bits))
-												error("Error in JPX stream");
+											if (!ReadBits(1, ref bits))
+												Error("Error in JPX stream");
 											if (bits == 1)
 												subband.inclusion[j].finished = true;
 											else
@@ -1086,7 +1032,6 @@ namespace XPdf {
 									}
 									cb.included = level < 0 ? 1 : 0;
 								}
-
 								if (cb.included != 0) {
 									if (!cb.seen) {     // zero bit-plane count
 										for (ttVal = i = 0, level = subband.maxTTLevel; level >= 0;
@@ -1099,8 +1044,8 @@ namespace XPdf {
 											else
 												ttVal = subband.zeroBitPlane[j].val;
 											while (!subband.zeroBitPlane[j].finished) {
-												if (!readBits(1, ref bits))
-													error("Error in JPX stream");
+												if (!ReadBits(1, ref bits))
+													Error("Error in JPX stream");
 												if (bits == 1)
 													subband.zeroBitPlane[j].finished = true;
 												else
@@ -1110,23 +1055,23 @@ namespace XPdf {
 										}
 										cb.nZeroBitPlanes = ttVal;
 									}
-									if (!readBits(1, ref bits)) // number of coding passes
-										error("Error in JPX stream");
+									if (!ReadBits(1, ref bits)) // number of coding passes
+										Error("Error in JPX stream");
 									if (bits == 0)
 										cb.nCodingPasses = 1;
-									else if (readBits(1, ref bits) && bits == 0)
+									else if (ReadBits(1, ref bits) && bits == 0)
 										cb.nCodingPasses = 2;
-									else if (readBits(2, ref bits) && bits < 3)
+									else if (ReadBits(2, ref bits) && bits < 3)
 										cb.nCodingPasses = 3 + bits;
-									else if (readBits(5, ref bits) && bits < 31)
+									else if (ReadBits(5, ref bits) && bits < 31)
 										cb.nCodingPasses = 6 + bits;
-									else if (readBits(7, ref bits))
+									else if (ReadBits(7, ref bits))
 										cb.nCodingPasses = 37 + bits;
 									else
-										error("Error in JPX stream");
+										Error("Error in JPX stream");
 									for (; true; ++cb.lBlock) {     // update Lblock
-										if (!readBits(1, ref bits))
-											error("Error in JPX stream");
+										if (!ReadBits(1, ref bits))
+											Error("Error in JPX stream");
 										if (0 == bits)
 											break;
 									}
@@ -1135,30 +1080,28 @@ namespace XPdf {
 										if (cb.nCodingPasses > cb.dataLen.Length)
 											ReAlloc(ref cb.dataLen, cb.nCodingPasses);
 										for (i = 0; i < cb.nCodingPasses; ++i)
-											if (!readBits(cb.lBlock, ref cb.dataLen[i]))
-												error("Error in JPX stream");
+											if (!ReadBits(cb.lBlock, ref cb.dataLen[i]))
+												Error("Error in JPX stream");
 									}
 									else {  // read the length
 										for (n = cb.lBlock, i = cb.nCodingPasses >> 1; i != 0; ++n, i >>= 1)
 											;
-										if (!readBits(n, ref cb.dataLen[0]))
-											error("Error in JPX stream");
+										if (!ReadBits(n, ref cb.dataLen[0]))
+											Error("Error in JPX stream");
 									}
 								}
 							}
 					}
 				if (0 != (tileComp.style & 0x04))
-					skipEPH();
-				tilePartLen = finishBitBuf();
-
-				//----- packet data
+					SkipEPH();
+				tilePartLen = FinishBitBuf();			//----- packet data
 				for (sb = 0; sb < (tile.res == 0 ? 1 : 3); ++sb) {
 					JPXSubband subband = precinct.subbands[sb];
 					for (cbY = 0; cbY < subband.nYCBs; ++cbY)
 						for (cbX = 0; cbX < subband.nXCBs; ++cbX) {
 							JPXCodeBlock cb = subband.cbs[cbY * subband.nXCBs + cbX];
 							if (0 != cb.included) {
-								readCodeBlockData(tileComp, resLevel, tile.res, sb, cb);
+								ReadCodeBlockData(tileComp, resLevel, tile.res, sb, cb);
 								if (0 != (tileComp.codeBlockStyle & 0x04))
 									for (i = 0; i < cb.nCodingPasses; ++i)
 										tilePartLen -= cb.dataLen[i];
@@ -1168,34 +1111,25 @@ namespace XPdf {
 							}
 						}
 				}
-
-			//----- next packet
-			nextPacket:
+			nextPacket:									//----- next packet
 				do {
-					switch (tile.progOrder) {
-						case 0: // layer, resolution level, component, precinct
-							tile.done = nextTile(ref tile.precinct, tile.maxNPrecincts, ref tile.comp, img.nComps,
+					if (tile.progOrder == 0) // layer, resolution level, component, precinct
+						tile.done = nextTile(ref tile.precinct, tile.maxNPrecincts, ref tile.comp, img.nComps,
 								ref tile.res, tile.maxNDecompLevels + 1, ref tile.layer, tile.nLayers);
-							break;
-						case 1: // resolution level, layer, component, precinct
-							tile.done = nextTile(ref tile.precinct, tile.maxNPrecincts, ref tile.comp, img.nComps,
+					else if (tile.progOrder == 1) // resolution level, layer, component, precinct
+						tile.done = nextTile(ref tile.precinct, tile.maxNPrecincts, ref tile.comp, img.nComps,
 								ref tile.layer, tile.nLayers, ref tile.res, tile.maxNDecompLevels + 1);
-							break;
-						case 2: // resolution level, precinct, component, layer - incorrect if there are subsampled components (?)
-							tile.done = nextTile(ref tile.layer, tile.nLayers, ref tile.comp, img.nComps,
+					else if (tile.progOrder == 2) // resolution level, precinct, component, layer - incorrect if there are subsampled components (?)
+						tile.done = nextTile(ref tile.layer, tile.nLayers, ref tile.comp, img.nComps,
 								ref tile.precinct, tile.maxNPrecincts, ref tile.res, tile.maxNPrecincts + 1);
-							break;
-						case 3: // precinct, component, resolution level, layer - incorrect if there are subsampled components (?)
-							tile.done = nextTile(ref tile.layer, tile.nLayers, ref tile.res, tile.maxNDecompLevels + 1,
+					else if (tile.progOrder == 3) // precinct, component, resolution level, layer - incorrect if there are subsampled components (?)
+						tile.done = nextTile(ref tile.layer, tile.nLayers, ref tile.res, tile.maxNDecompLevels + 1,
 								ref tile.comp, img.nComps, ref tile.precinct, tile.maxNPrecincts);
-							break;
-						case 4: // component, precinct, resolution level, layer
-							tile.done = nextTile(ref tile.layer, tile.nLayers, ref tile.res, tile.maxNDecompLevels + 1,
+					else if (tile.progOrder == 4) // component, precinct, resolution level, layer
+						tile.done = nextTile(ref tile.layer, tile.nLayers, ref tile.res, tile.maxNDecompLevels + 1,
 								ref tile.precinct, tile.maxNPrecincts, ref tile.comp, img.nComps);
-							break;
-					}
 				} while (!tile.done && (tile.res > tile.tileComps[tile.comp].nDecompLevels
-											|| tile.precinct >= tile.tileComps[tile.comp].resLevels[tile.res].precincts.Length));
+								|| tile.precinct >= tile.tileComps[tile.comp].resLevels[tile.res].precincts.Length));
 			}
 			return;
 			bool nextTile(ref int v1, int m1, ref int v2, int m2, ref int v3, int m3, ref int v4, int m4) {
@@ -1210,10 +1144,8 @@ namespace XPdf {
 				return true;
 			}
 		}
-		void readCodeBlockData(JPXTileComp tileComp, JPXResLevel resLevel, int res, int sb, JPXCodeBlock cb) {
-			ArrayPtr<int> coeff0 = new ArrayPtr<int>(), coeff1 = new ArrayPtr<int>(), coeff = new ArrayPtr<int>();
-			ArrayPtr<bool> touched0 = new ArrayPtr<bool>(), touched1 = new ArrayPtr<bool>(), touched = new ArrayPtr<bool>();
-			int horiz, vert, diag, all, xorBit, horizSign, vertSign, bit, segSym, n, i, x, y0, y1, cc, cx;
+		void ReadCodeBlockData(JPXTileComp tileComp, JPXResLevel resLevel, int res, int sb, JPXCodeBlock cb) {
+			int n, i;
 			if (res > tileComp.nDecompLevels) { // skip the codeblock data
 				if (0 != (tileComp.codeBlockStyle & 0x04))
 					for (n = 0, i = 0; i < cb.nCodingPasses; ++i)
@@ -1225,253 +1157,252 @@ namespace XPdf {
 			}
 			if (null != cb.arithDecoder) {
 				if (0 != (tileComp.codeBlockStyle & 0x04)) {
-					cb.arithDecoder.setStream(bufStr, cb.dataLen[0]);
-					cb.arithDecoder.start();
+					cb.arithDecoder.SetStream(bufStr, cb.dataLen[0]);
+					cb.arithDecoder.Start();
 				}
 				else
-					cb.arithDecoder.restart(cb.dataLen[0]);
+					cb.arithDecoder.Restart(cb.dataLen[0]);
 			}
 			else {
 				cb.arithDecoder = new ArithmDecoder();
-				cb.arithDecoder.setStream(bufStr, cb.dataLen[0]);
-				cb.arithDecoder.start();
+				cb.arithDecoder.SetStream(bufStr, cb.dataLen[0]);
+				cb.arithDecoder.Start();
 				cb.stats = new CXStats(jpxNContexts);
-				cb.stats.setEntry(jpxContextSigProp, 4, 0);
-				cb.stats.setEntry(jpxContextRunLength, 3, 0);
-				cb.stats.setEntry(jpxContextUniform, 46, 0);
+				cb.stats.SetEntry(jpxContextSigProp, 4, 0);
+				cb.stats.SetEntry(jpxContextRunLength, 3, 0);
+				cb.stats.SetEntry(jpxContextUniform, 46, 0);
 			}
 			for (i = 0; i < cb.nCodingPasses; ++i) {
 				if (0 != (tileComp.codeBlockStyle & 0x04) && i > 0) {
-					cb.arithDecoder.setStream(bufStr, cb.dataLen[i]);
-					cb.arithDecoder.start();
+					cb.arithDecoder.SetStream(bufStr, cb.dataLen[i]);
+					cb.arithDecoder.Start();
 				}
-
 				switch (cb.nextPass) {
-					case jpxPassSigProp:    //----- significance propagation pass
-						for (y0 = cb.y0, coeff0.set(cb.coeffs), touched0.set(cb.touched); y0 < cb.y1;
-								y0 += 4, coeff0.inc(4 * tileComp.w), touched0.inc(4 << resLevel.codeBlockW)) {
-							for (x = cb.x0, coeff1.set(coeff0), touched1.set(touched0);
-								 x < cb.x1; ++x, ++coeff1, ++touched1) {
-								for (y1 = 0, coeff.set(coeff1), touched.set(touched1);
-									 y1 < 4 && y0 + y1 < cb.y1;
-									 ++y1, coeff.inc(tileComp.w), touched.inc(resLevel.cbW)) {
-									if (0 == coeff[0]) {
-										horiz = vert = diag = 0;
-										horizSign = vertSign = 2;
-										if (x > cb.x0) {
-											if (0 != (cc = coeff[-1])) {
-												++horiz;
-												horizSign += cc < 0 ? -1 : 1;
-											}
-											if (y0 + y1 > cb.y0)
-												diag += 0 != coeff[-tileComp.w - 1] ? 1 : 0;
-											if (y0 + y1 < cb.y1 - 1
-											&& (0 == (tileComp.codeBlockStyle & 0x08) || y1 < 3))
-												diag += 0 != coeff[tileComp.w - 1] ? 1 : 0;
-										}
-										if (x < cb.x1 - 1) {
-											if (0 != (cc = coeff[1])) {
-												++horiz;
-												horizSign += cc < 0 ? -1 : 1;
-											}
-											if (y0 + y1 > cb.y0)
-												diag += 0 != coeff[-tileComp.w + 1] ? 1 : 0;
-											if (y0 + y1 < cb.y1 - 1
-											&& (0 == (tileComp.codeBlockStyle & 0x08) || y1 < 3))
-												diag += 0 != coeff[tileComp.w + 1] ? 1 : 0;
-										}
-										if (y0 + y1 > cb.y0 && 0 != (cc = coeff[-tileComp.w])) {
-											++vert;
-											vertSign += cc < 0 ? -1 : 1;
-										}
-										if (y0 + y1 < cb.y1 - 1
-										&& (0 == (tileComp.codeBlockStyle & 0x08) || y1 < 3)
-										&& 0 != (cc = coeff[tileComp.w])) {
-											++vert;
-											vertSign += cc < 0 ? -1 : 1;
-										}
-										cx = sigPropContext[horiz][vert][diag][res == 0 ? 1 : sb];
-										if (cx != 0) {
-											if (0 != cb.arithDecoder.decodeBit(cx, cb.stats)) {
-												cx = signContext[horizSign][vertSign][0];
-												xorBit = signContext[horizSign][vertSign][1];
-												coeff[0] = (0 != (cb.arithDecoder.decodeBit(cx, cb.stats) ^ xorBit))
-													? -1 : 1;
-											}
-											touched[0] = true;
-										}
-									}
-								}
-							}
-						}
-						++cb.nextPass;
-						break;
-
-					case jpxPassMagRef:         //----- magnitude refinement pass
-						for (y0 = cb.y0, coeff0.set(cb.coeffs), touched0.set(cb.touched); y0 < cb.y1;
-								y0 += 4, coeff0.inc(4 * tileComp.w), touched0.inc(4 << resLevel.codeBlockW)) {
-							for (x = cb.x0, coeff1.set(coeff0), touched1.set(touched0);
-								 x < cb.x1; ++x, ++coeff1, ++touched1) {
-								for (y1 = 0, coeff.set(coeff1), touched.set(touched1);
-									 y1 < 4 && y0 + y1 < cb.y1;
-									 ++y1, coeff.inc(tileComp.w), touched.inc(resLevel.cbW)) {
-									if ((cc = coeff[0]) != 0 && !touched[0]) {
-										if (cc == 1 || cc == -1) {
-											all = 0;
-											if (x > cb.x0) {
-												all += 0 != coeff[-1] ? 1 : 0;
-												if (y0 + y1 > cb.y0)
-													all += 0 != coeff[-tileComp.w - 1] ? 1 : 0;
-												if (y0 + y1 < cb.y1 - 1
-												&& (0 == (tileComp.codeBlockStyle & 0x08) || y1 < 3))
-													all += 0 != coeff[tileComp.w - 1] ? 1 : 0;
-											}
-											if (x < cb.x1 - 1) {
-												all += 0 != coeff[1] ? 1 : 0;
-												if (y0 + y1 > cb.y0)
-													all += 0 != coeff[-tileComp.w + 1] ? 1 : 0;
-												if (y0 + y1 < cb.y1 - 1
-												&& (0 == (tileComp.codeBlockStyle & 0x08) || y1 < 3))
-													all += 0 != coeff[tileComp.w + 1] ? 1 : 0;
-											}
-											if (y0 + y1 > cb.y0)
-												all += 0 != coeff[-tileComp.w] ? 1 : 0;
-											if (y0 + y1 < cb.y1 - 1
-											&& (0 == (tileComp.codeBlockStyle & 0x08) || y1 < 3))
-												all += 0 != coeff[tileComp.w] ? 1 : 0;
-											cx = all != 0 ? 15 : 14;
-										}
-										else
-											cx = 16;
-										bit = cb.arithDecoder.decodeBit(cx, cb.stats);
-										coeff[0] = (cc << 1) + (cc < 0 ? -bit : +bit);
-										touched[0] = true;
-									}
-								}
-							}
-						}
-						++cb.nextPass;
-						break;
-
-					case jpxPassCleanup:
-						for (y0 = cb.y0, coeff0.set(cb.coeffs), touched0.set(cb.touched);
-								y0 < cb.y1;
-								y0 += 4, coeff0.inc(4 * tileComp.w), touched0.inc(4 << resLevel.codeBlockW)) {
-							for (x = cb.x0, coeff1.set(coeff0), touched1.set(touched0);
-								 x < cb.x1; ++x, ++coeff1, ++touched1) {
-								y1 = 0;
-								if (y0 + 3 < cb.y1
-								&& !(touched1[0])
-								&& !(touched1[resLevel.cbW])
-								&& !(touched1[2 * resLevel.cbW])
-								&& !(touched1[3 * resLevel.cbW])
-								&& (x == cb.x0 || y0 == cb.y0 || 0 == coeff1[-tileComp.w - 1])
-								&& (y0 == cb.y0 || 0 == coeff1[-tileComp.w])
-								&& (x == cb.x1 - 1 || y0 == cb.y0 || 0 == coeff1[-tileComp.w + 1])
-								&& (x == cb.x0 || (0 == coeff1[-1]
-										&& 0 == coeff1[tileComp.w - 1]
-										&& 0 == coeff1[2 * tileComp.w - 1]
-										&& 0 == coeff1[3 * tileComp.w - 1]))
-								&& (x == cb.x1 - 1 || (0 == coeff1[1]
-										&& 0 == coeff1[tileComp.w + 1]
-										&& 0 == coeff1[2 * tileComp.w + 1]
-										&& 0 == coeff1[3 * tileComp.w + 1]))
-								&& (0 != (tileComp.codeBlockStyle & 0x08)
-									|| ((x == cb.x0 || y0 + 4 == cb.y1 || 0 == coeff1[4 * tileComp.w - 1])
-										&& (y0 + 4 == cb.y1 || 0 == coeff1[4 * tileComp.w])
-										&& (x == cb.x1 - 1 || y0 + 4 == cb.y1
-											|| 0 == coeff1[4 * tileComp.w + 1])))) {
-									if (0 != cb.arithDecoder.decodeBit(jpxContextRunLength, cb.stats)) {
-										y1 = cb.arithDecoder.decodeBit(jpxContextUniform, cb.stats);
-										y1 = (y1 << 1) | cb.arithDecoder.decodeBit(jpxContextUniform, cb.stats);
-										coeff.set(coeff1, (y1 * tileComp.w));
-										cx = signContext[2][2][0];
-										xorBit = signContext[2][2][1];
-										coeff[0] = (0 != (cb.arithDecoder.decodeBit(cx, cb.stats)
-														^ xorBit)) ? -1 : 1;
-										++y1;
-									}
-									else
-										y1 = 4;
-								}
-								for (coeff.set(coeff1, (y1 * tileComp.w)),
-									touched.set(touched1, (y1 << resLevel.codeBlockW));
-										y1 < 4 && y0 + y1 < cb.y1;
-										++y1, coeff.inc(tileComp.w), touched.inc(resLevel.cbW)) {
-									if (!touched[0]) {
-										horiz = vert = diag = 0;
-										horizSign = vertSign = 2;
-										if (x > cb.x0) {
-											if (0 != (cc = coeff[-1])) {
-												++horiz;
-												horizSign += cc < 0 ? -1 : 1;
-											}
-											if (y0 + y1 > cb.y0)
-												diag += 0 != coeff[-tileComp.w - 1] ? 1 : 0;
-											if (y0 + y1 < cb.y1 - 1
-											&& (0 == (tileComp.codeBlockStyle & 0x08) || y1 < 3))
-												diag += 0 != coeff[tileComp.w - 1] ? 1 : 0;
-										}
-										if (x < cb.x1 - 1) {
-											if (0 != (cc = coeff[1])) {
-												++horiz;
-												horizSign += cc < 0 ? -1 : 1;
-											}
-											if (y0 + y1 > cb.y0)
-												diag += 0 != coeff[-tileComp.w + 1] ? 1 : 0;
-											if (y0 + y1 < cb.y1 - 1
-											&& (0 == (tileComp.codeBlockStyle & 0x08) || y1 < 3))
-												diag += 0 != coeff[tileComp.w + 1] ? 1 : 0;
-										}
-										if (y0 + y1 > cb.y0)
-											if (0 != (cc = coeff[-tileComp.w])) {
-												++vert;
-												vertSign += cc < 0 ? -1 : 1;
-											}
-										if (y0 + y1 < cb.y1 - 1
-										&& (0 == (tileComp.codeBlockStyle & 0x08) || y1 < 3)
-										&& 0 != (cc = coeff[tileComp.w])) {
-											++vert;
-											vertSign += cc < 0 ? -1 : 1;
-										}
-										cx = sigPropContext[horiz][vert][diag][res == 0 ? 1 : sb];
-										if (0 != cb.arithDecoder.decodeBit(cx, cb.stats)) {
-											cx = signContext[horizSign][vertSign][0];
-											xorBit = signContext[horizSign][vertSign][1];
-											coeff[0] = (0 != (cb.arithDecoder.decodeBit(cx, cb.stats) ^ xorBit))
-												? -1 : 1;
-										}
-									}
-									else
-										touched[0] = false;
-								}
-							}
-						}
-						++cb.len;
-						// look for a segmentation symbol
-						if (0 != (tileComp.codeBlockStyle & 0x20)) {
-							segSym = cb.arithDecoder.decodeBit(jpxContextUniform, cb.stats) << 3;
-							segSym |= cb.arithDecoder.decodeBit(jpxContextUniform, cb.stats) << 2;
-							segSym |= cb.arithDecoder.decodeBit(jpxContextUniform, cb.stats) << 1;
-							segSym |= cb.arithDecoder.decodeBit(jpxContextUniform, cb.stats);
-							if (segSym != 0x0a) // in theory this should be a fatal error, but it seems to be problematic
-								error("Missing or invalid segmentation symbol in JPX stream", false);
-						}
-						cb.nextPass = jpxPassSigProp;
-						break;
+					case jpxPassSigProp:	SignificancePropagationPass(tileComp, resLevel, res, sb, cb); break;
+					case jpxPassMagRef:		MagnitudeRefinementPass(tileComp, resLevel, cb); break;
+					case jpxPassCleanup:	CleanupPass(tileComp, resLevel, res, sb, cb);	break;
 				}
 				if (0 != (tileComp.codeBlockStyle & 0x02)) {
-					cb.stats.reset();
-					cb.stats.setEntry(jpxContextSigProp, 4, 0);
-					cb.stats.setEntry(jpxContextRunLength, 3, 0);
-					cb.stats.setEntry(jpxContextUniform, 46, 0);
+					cb.stats.Reset();
+					cb.stats.SetEntry(jpxContextSigProp, 4, 0);
+					cb.stats.SetEntry(jpxContextRunLength, 3, 0);
+					cb.stats.SetEntry(jpxContextUniform, 46, 0);
 				}
 				if (0 != (tileComp.codeBlockStyle & 0x04))
-					cb.arithDecoder.cleanup();
+					cb.arithDecoder.Cleanup();
 			}
-			cb.arithDecoder.cleanup();
+			cb.arithDecoder.Cleanup();
 		}
-		void inverseTransform(JPXTileComp tileComp) {
+
+		private static void CleanupPass(JPXTileComp tileComp, JPXResLevel resLevel, int res, int sb, JPXCodeBlock cb) {
+			ArrayPtr<int> coeff0 = new ArrayPtr<int>(), coeff1 = new ArrayPtr<int>(), coeff = new ArrayPtr<int>();
+			ArrayPtr<bool> touched0 = new ArrayPtr<bool>(), touched1 = new ArrayPtr<bool>(), touched = new ArrayPtr<bool>();
+			int x, y0, y1, cc;
+			for (y0 = cb.y0, coeff0.set(cb.coeffs), touched0.set(cb.touched); y0 < cb.y1;
+					y0 += 4, coeff0.off+=4*tileComp.w, touched0.off+=4<<resLevel.codeBlockW) {
+				for (x = cb.x0, coeff1.set(coeff0), touched1.set(touched0);
+					 x < cb.x1; ++x, ++coeff1, ++touched1) {
+					y1 = 0;
+					bool cbs8 = 0==(tileComp.codeBlockStyle&0x08),
+						cx0 = x==cb.x0, cy0 = y0==cb.y0, cx1 = x==cb.x1-1, cy1 = y0+4==cb.y1;
+					if (y0 + 3 < cb.y1
+					&& !touched1.data[touched1.off]
+					&& !touched1.data[touched1.off+resLevel.cbW]
+					&& !touched1.data[touched1.off+resLevel.cbW*2]
+					&& !touched1.data[touched1.off+resLevel.cbW*3]
+					&& (	   cy0 || 0 == coeff1.data[coeff1.off-tileComp.w])
+					&& (cx0 || cy0 || 0 == coeff1.data[coeff1.off-tileComp.w-1])
+					&& (cx1 || cy0 || 0 == coeff1.data[coeff1.off-tileComp.w+1])
+					&& (cx0 || (0 == coeff1.data[coeff1.off-1]
+							 && 0 == coeff1.data[coeff1.off-1+tileComp.w]
+							 && 0 == coeff1.data[coeff1.off-1+tileComp.w*2]
+							 && 0 == coeff1.data[coeff1.off-1+tileComp.w*3]))
+					&& (cx1 || (0 == coeff1.data[coeff1.off+1]
+							 && 0 == coeff1.data[coeff1.off+1+tileComp.w]
+							 && 0 == coeff1.data[coeff1.off+1+tileComp.w*2]
+							 && 0 == coeff1.data[coeff1.off+1+tileComp.w*3]))
+					&& (!cbs8 || ((     cy1 || 0 == coeff1.data[coeff1.off+4*tileComp.w])
+							&& (cx0 || cy1 || 0 == coeff1.data[coeff1.off+4*tileComp.w-1])
+							&& (cx1 || cy1 || 0 == coeff1.data[coeff1.off+4*tileComp.w+1])))) {
+						if (0 != cb.arithDecoder.DecodeBit(jpxContextRunLength, cb.stats)) {
+							y1 = cb.arithDecoder.DecodeBit(jpxContextUniform, cb.stats);
+							y1 = (y1 << 1) | cb.arithDecoder.DecodeBit(jpxContextUniform, cb.stats);
+							coeff.set(coeff1, (y1 * tileComp.w));
+							var sc = signContext[2][2];
+							coeff.data[coeff.off] 
+								= (0 != (cb.arithDecoder.DecodeBit(sc[0],cb.stats)^sc[1])) ? -1 : 1;
+							++y1;
+						}
+						else
+							y1 = 4;
+					}
+					for (coeff.set(coeff1, (y1 * tileComp.w)),
+						touched.set(touched1, (y1 << resLevel.codeBlockW));
+							y1 < 4 && y0 + y1 < cb.y1;
+							++y1, coeff.off+=tileComp.w, touched.off+=resLevel.cbW) {
+						if (touched.data[touched.off]) {
+							touched.data[touched.off] = false;
+							continue;
+						}
+						int horiz = 0, vert = 0, diag = 0, horizSign = 2, vertSign = 2;
+						if (x > cb.x0) {
+							if (0 != (cc = coeff.data[coeff.off-1])) {
+								++horiz;
+								horizSign += cc < 0 ? -1 : 1;
+							}
+							if (y0 + y1 > cb.y0 && 0 != coeff.data[coeff.off-tileComp.w-1])
+								diag++;
+							if (y0 + y1 < cb.y1 - 1 && (cbs8 || y1 < 3)
+							&& 0 != coeff.data[coeff.off+tileComp.w-1])
+								diag++;
+						}
+						if (x < cb.x1 - 1) {
+							if (0 != (cc = coeff.data[coeff.off+1])) {
+								++horiz;
+								horizSign += cc < 0 ? -1 : 1;
+							}
+							if (y0+y1 > cb.y0 && 0 != coeff.data[coeff.off-tileComp.w+1])
+								diag++;
+							if (y0 + y1 < cb.y1 - 1 && (cbs8 || y1 < 3)
+							&& 0 != coeff.data[coeff.off+tileComp.w+1])
+								diag++;
+						}
+						if (y0+y1 > cb.y0 && 0 != (cc = coeff.data[coeff.off-tileComp.w])) {
+							++vert;
+							vertSign += cc < 0 ? -1 : 1;
+						}
+						if (y0+y1 < cb.y1-1 && (cbs8 || y1<3) && 0 != (cc=coeff.data[coeff.off+tileComp.w])) {
+							++vert;
+							vertSign += cc < 0 ? -1 : 1;
+						}
+						int cx = sigPropContext[horiz][vert][diag][res == 0 ? 1 : sb];
+						if (0 != cb.arithDecoder.DecodeBit(cx, cb.stats)) {
+							var sc = signContext[horizSign][vertSign];
+							coeff.data[coeff.off] 
+								= (0!=(cb.arithDecoder.DecodeBit(sc[0],cb.stats)^sc[1]))?-1:1;
+						}
+					}
+				}
+			}
+			++cb.len;
+			if (0 != (tileComp.codeBlockStyle & 0x20)) {    // look for a segmentation symbol
+				int segSym = cb.arithDecoder.DecodeBit(jpxContextUniform, cb.stats) << 3;
+				segSym |= cb.arithDecoder.DecodeBit(jpxContextUniform, cb.stats) << 2;
+				segSym |= cb.arithDecoder.DecodeBit(jpxContextUniform, cb.stats) << 1;
+				segSym |= cb.arithDecoder.DecodeBit(jpxContextUniform, cb.stats);
+				if (segSym != 0x0a) // in theory this should be a fatal error, but it seems to be problematic
+					Error("Missing or invalid segmentation symbol in JPX stream", false);
+			}
+			cb.nextPass = jpxPassSigProp;
+		}
+
+		void MagnitudeRefinementPass(JPXTileComp tileComp, JPXResLevel resLevel, JPXCodeBlock cb) {
+			ArrayPtr<int> coeff0 = new ArrayPtr<int>(cb.coeffs), coeff1 = new ArrayPtr<int>(cb.coeffs), coeff = new ArrayPtr<int>(cb.coeffs);
+			ArrayPtr<bool> touched0 = new ArrayPtr<bool>(cb.touched), touched1 = new ArrayPtr<bool>(cb.touched), touched = new ArrayPtr<bool>(cb.touched);
+			int x, y0, y1, cc;
+			for (y0 = cb.y0; y0 < cb.y1; 
+					y0 += 4, coeff0.off+=4*tileComp.w, touched0.off+=(4<<resLevel.codeBlockW)) {
+				for (x = cb.x0, coeff1.off=coeff0.off, touched1.off=touched0.off;
+					 x < cb.x1; ++x, coeff1.off++, touched1.off++) {
+					for (y1 = 0, coeff.off=coeff1.off, touched.off=touched1.off;
+						 y1<4 && y0+y1<cb.y1; ++y1, coeff.off+=tileComp.w, touched.off+=resLevel.cbW) {
+						if ((cc = coeff.data[coeff.off]) != 0 && !touched.data[touched.off]) {
+							int cx = 16;
+							if (cc == 1 || cc == -1) {
+								int all = 0;
+								bool cbs8 = 0 == (tileComp.codeBlockStyle & 0x08),
+									cy0 = y0 + y1 > cb.y0, cy1 = y0 + y1 < cb.y1 - 1;
+								if (x > cb.x0) {
+									all += 0 != coeff.data[coeff.off-1] ? 1 : 0;
+									if (cy0 && 0 != coeff.data[coeff.off-tileComp.w-1])
+										all++;
+									if (cy1 && (cbs8 || y1<3) && 0!=coeff.data[coeff.off+tileComp.w-1])
+										all++;
+								}
+								if (x < cb.x1 - 1) {
+									all += 0 != coeff.data[coeff.off+1] ? 1 : 0;
+									if (cy0 && 0 != coeff.data[coeff.off-tileComp.w+1])
+										all++;
+									if (cy1 && (cbs8 || y1<3) && 0!=coeff.data[coeff.off+tileComp.w+1])
+										all++;
+								}
+								if (cy0 && 0 != coeff.data[coeff.off-tileComp.w])
+									all++;
+								if (cy1 && (cbs8 || y1<3) && 0!=coeff.data[coeff.off+tileComp.w])
+									all++;
+								cx = all != 0 ? 15 : 14;
+							}
+							int bit = cb.arithDecoder.DecodeBit(cx, cb.stats);
+							coeff.data[coeff.off] = (cc << 1) + (cc < 0 ? -bit : +bit);
+							touched.data[touched.off] = true;
+						}
+					}
+				}
+			}
+			++cb.nextPass;
+		}
+
+		int SignificancePropagationPass(JPXTileComp tileComp, JPXResLevel resLevel, int res, int sb, JPXCodeBlock cb) {
+			ArrayPtr<int> coeff0 = new ArrayPtr<int>(cb.coeffs), coeff1 = new ArrayPtr<int>(cb.coeffs), coeff = new ArrayPtr<int>(cb.coeffs);
+			ArrayPtr<bool> touched0 = new ArrayPtr<bool>(cb.touched), touched1 = new ArrayPtr<bool>(cb.touched), touched = new ArrayPtr<bool>(cb.touched);
+			int x, y0, y1, cc;
+			for (y0 = cb.y0, coeff0.set(cb.coeffs), touched0.set(cb.touched); y0 < cb.y1;
+											y0 += 4, coeff0.inc(4 * tileComp.w), touched0.inc(4 << resLevel.codeBlockW)) {
+				for (x = cb.x0, coeff1.off = coeff0.off, touched1.off = touched0.off;
+					 x < cb.x1; ++x, coeff1.off++, touched1.off++) {
+					for (y1 = 0, coeff.off=coeff1.off, touched.off=touched1.off;
+						 y1 < 4 && y0 + y1 < cb.y1;
+						 ++y1, coeff.off += tileComp.w, touched.off += resLevel.cbW) {
+						if (0 == coeff.data[coeff.off]) {
+							int horiz = 0, vert = 0, diag = 0, horizSign = 2, vertSign = 2;
+							bool cbs8 = 0 == (tileComp.codeBlockStyle & 0x08),
+								cy0 = y0 + y1 > cb.y0, cy1 = y0 + y1 < cb.y1 - 1;
+							if (x > cb.x0) {
+								if (0 != (cc = coeff.data[coeff.off-1])) {
+									++horiz;
+									horizSign += cc < 0 ? -1 : 1;
+								}
+								if (cy0 && 0 != coeff.data[coeff.off-tileComp.w-1])
+									diag++;
+								if (cy1 && (cbs8 || y1<3) && 0 != coeff.data[coeff.off+tileComp.w-1])
+									diag++;
+							}
+							if (x < cb.x1 - 1) {
+								if (0 != (cc = coeff.data[coeff.off+1])) {
+									++horiz;
+									horizSign += cc < 0 ? -1 : 1;
+								}
+								if (cy0 && 0 != coeff.data[coeff.off-tileComp.w+1])
+									diag++;
+								if (cy1 && (cbs8 || y1<3) && 0 != coeff.data[coeff.off+tileComp.w+1])
+									diag++;
+							}
+							if (cy0 && 0 != (cc=coeff.data[coeff.off-tileComp.w])) {
+								++vert;
+								vertSign += cc < 0 ? -1 : 1;
+							}
+							if (cy1 && (cbs8 || y1 < 3) && 0 != (cc=coeff.data[coeff.off+tileComp.w])) {
+								++vert;
+								vertSign += cc < 0 ? -1 : 1;
+							}
+							int cx = sigPropContext[horiz][vert][diag][res == 0 ? 1 : sb];
+							if (cx != 0) {
+								if (0 != cb.arithDecoder.DecodeBit(cx, cb.stats)) {
+									var sc = signContext[horizSign][vertSign];
+									coeff[0] = 0!=(cb.arithDecoder.DecodeBit(sc[0], cb.stats)
+														^ sc[1]) ? -1 : 1;
+								}
+								touched[0] = true;
+							}
+						}
+					}
+				}
+			}
+			++cb.nextPass;
+			return y0;
+		}
+
+		void InverseTransform(JPXTileComp tileComp) {
 			ArrayPtr<int> coeff0 = new ArrayPtr<int>(), coeff = new ArrayPtr<int>();
 			ArrayPtr<bool> touched0 = new ArrayPtr<bool>(), touched = new ArrayPtr<bool>();
 			int eps, shift, r, x, y, shift2;
@@ -1524,9 +1455,9 @@ namespace XPdf {
 			// and inverse transform to get (n-1)LL, which will be stored
 			// in the upper-left corner of the tile-component data array
 			for (r = 1; r <= tileComp.nDecompLevels; ++r)
-				inverseTransformLevel(tileComp, r, tileComp.resLevels[r]);
+				InverseTransformLevel(tileComp, r, tileComp.resLevels[r]);
 		}
-		void inverseTransformLevel(JPXTileComp tileComp, int r, JPXResLevel resLevel) {
+		void InverseTransformLevel(JPXTileComp tileComp, int r, JPXResLevel resLevel) {
 			ArrayPtr<int> coeff0 = new ArrayPtr<int>(), coeff = new ArrayPtr<int>();
 			ArrayPtr<bool> touched0 = new ArrayPtr<bool>(), touched = new ArrayPtr<bool>();
 			double mu;
@@ -1586,7 +1517,7 @@ namespace XPdf {
 			}
 			//----- inverse transform
 			ArrayPtr<int> dataPtr = new ArrayPtr<int>(tileComp.data),
-							bufPtr = new ArrayPtr<int>(tileComp.buf);
+						   bufPtr = new ArrayPtr<int>(tileComp.buf);
 			int offset = 3 + (resLevel.x0 & 1);                                     // horizontal (row) transforms
 			int o1, o2;
 			(o1, o2) = resLevel.bx0[0] == resLevel.bx0[1] ? (0, 1) : (1, 0);
@@ -1595,7 +1526,7 @@ namespace XPdf {
 					bufPtr.data[bufPtr.off] = dataPtr.data[dataPtr.off + x];        // fetch LL/LH
 				for (x = nx1, bufPtr.off = offset + o2; x < nx2; ++x, bufPtr.off += 2)
 					bufPtr.data[bufPtr.off] = dataPtr.data[dataPtr.off + x];        // fetch LL/LH
-				inverseTransform1D(tileComp, tileComp.buf, offset, nx2);
+				InverseTransform1D(tileComp, tileComp.buf, offset, nx2);
 				Array.Copy(bufPtr.data, offset, dataPtr.data, dataPtr.off, nx2);
 			}
 			offset = 3 + (resLevel.y0 & 1);                                         // vertical (column) transforms
@@ -1605,12 +1536,16 @@ namespace XPdf {
 					bufPtr.data[bufPtr.off] = dataPtr.data[dataPtr.off + y * tileComp.w];   // fetch LL/HL
 				for (y = ny1, bufPtr.off = offset + o2; y < ny2; ++y, bufPtr.off += 2)
 					bufPtr.data[bufPtr.off] = dataPtr.data[dataPtr.off + y * tileComp.w];   // fetch LH/HH
-				inverseTransform1D(tileComp, tileComp.buf, offset, ny2);
+				InverseTransform1D(tileComp, tileComp.buf, offset, ny2);
 				for (y = 0, bufPtr.off = offset; y < ny2; ++y, ++bufPtr.off)
 					dataPtr.data[dataPtr.off + y * tileComp.w] = bufPtr.data[bufPtr.off];
 			}
 		}
-		void inverseTransform1D(JPXTileComp tileComp, int[] data, int offset, int n) {
+		// constants used in the IDWT
+		const double idwtAlpha = -1.586134342059924, idwtBeta = -0.052980118572961,
+			idwtGamma = 0.882911075530934, idwtDelta = 0.443506852043971,
+			idwtKappa = 1.230174104914001, idwtIKappa = (1.0 / idwtKappa);
+		void InverseTransform1D(JPXTileComp tileComp, int[] data, int offset, int n) {
 			if (n != 1) {
 				int end = offset + n, i;
 				data[end] = data[end - 2];
@@ -1635,18 +1570,20 @@ namespace XPdf {
 				if (offset == 4)
 					data[0] = data[offset + 4];
 				if (tileComp.transform == 0) {              //----- 9-7 irreversible filter
-					for (i = 1; i <= end + 2; i += 2)       // step 1 (even)
-						data[i] = (int)(idwtKappa * data[i]);
+					//for (i = 1; i <= end + 2; i += 2)       // step 1 (even)
+					//	data[i] = (int)(idwtKappa * data[i]);
 					for (i = 0; i <= end + 3; i += 2)       // step 2 (odd)
 						data[i] = (int)(idwtIKappa * data[i]);
-					for (i = 1; i <= end + 2; i += 2)       // step 3 (even)
-						data[i] = (int)(data[i] - idwtDelta * (data[i - 1] + data[i + 1]));
+					for (i = 1; i <= end + 2; i += 2)       // step 1&3 (even) - combined
+						data[i] = (int)(idwtKappa*data[i] - idwtDelta*(data[i-1]+data[i+1]));
+					//for (i = 1; i <= end + 2; i += 2)       // step 3 (even)
+					//	data[i] -= (int)(idwtDelta * (data[i - 1] + data[i + 1]));
 					for (i = 2; i <= end + 1; i += 2)       // step 4 (odd)
-						data[i] = (int)(data[i] - idwtGamma * (data[i - 1] + data[i + 1]));
+						data[i] -= (int)(idwtGamma * (data[i - 1] + data[i + 1]));
 					for (i = 3; i <= end; i += 2)           // step 5 (even)
-						data[i] = (int)(data[i] - idwtBeta * (data[i - 1] + data[i + 1]));
+						data[i] -= (int)(idwtBeta * (data[i - 1] + data[i + 1]));
 					for (i = 4; i <= end - 1; i += 2)       // step 6 (odd)
-						data[i] = (int)(data[i] - idwtAlpha * (data[i - 1] + data[i + 1]));
+						data[i] -= (int)(idwtAlpha * (data[i - 1] + data[i + 1]));
 				}
 				else {                                      //----- 5-3 reversible filter
 					for (i = 3; i <= end; i += 2)           // step 1 (even)
@@ -1658,7 +1595,7 @@ namespace XPdf {
 			else if (offset == 4)
 				data[0] >>= 1;
 		}
-		void inverseMultiCompAndDC(JPXTile tile) {
+		void InverseMultiCompAndDC(JPXTile tile) {
 			int t, j, x, y;
 			if (tile.multiComp == 1) {                  //----- inverse multi-component transform
 				if (img.nComps < 3
@@ -1714,43 +1651,36 @@ namespace XPdf {
 				}
 			}
 		}
-		bool readBoxHdr(ref int boxType, ref int boxLen, ref int dataLen) {
-			(boxLen, boxType) = (GetInt(4), GetInt(4));
+		bool ReadBoxHdr(ref int boxType, ref int boxLen, ref int dataLen) {
+			(boxLen, boxType) = (bufStr.ReadInt(4), bufStr.ReadInt(4));
 			if (boxLen == 1) {
 				bufStr.Position += 4;
-				boxLen = GetInt(4);
+				boxLen = bufStr.ReadInt(4);
 				dataLen = boxLen - 16;
 			}
 			else
 				dataLen = (boxLen == 0) ? 0 : boxLen - 8;
 			return boxType != -1;
 		}
-		bool readMarkerHdr(ref int segType, ref int segLen) {
-			int c;
-			do {
-				do {
-					if ((c = bufStr.ReadByte()) == -1)
-						return false;
-				} while (c != 0xff);
-				do {
-					if ((c = bufStr.ReadByte()) == -1)
-						return false;
-				} while (c == 0xff);
-			} while (c == 0x00);
-			segType = c;
-			if ((c >= 0x30 && c <= 0x3f) || c == 0x4f || c == 0x92 || c == 0x93 || c == 0xd9) {
-				segLen = 0;
-				return true;
+		void ReadMarkerHdr(ref int segType, ref int segLen) {
+			for (segType = 0; segType == 0; ) {
+				for (; (segType = bufStr.ReadByte()) != -1 && segType != 0xff;)
+					;
+				for (; (segType = bufStr.ReadByte()) == 0xff;)
+					;
 			}
-			return (segLen = GetInt(2)) != -1;
+			segLen = (segType == 0x4f || segType == 0x92 || segType == 0x93 || segType == 0xd9
+						|| (segType >= 0x30 && segType <= 0x3f)) ? 0 : bufStr.ReadInt(2);
+			if (segType == -1 || segLen == -1)
+				Error("Error in JPX tile-part codestream");
 		}
-		void startBitBuf(int byteCountA) {
+		void StartBitBuf(int byteCountA) {
 			bitBufLen = 0;
 			bitBufSkip = false;
 			byteCount = byteCountA;
 		}
-		bool readBits(int nBits, ref int x) {
-			for (int c; bitBufLen < nBits;) {
+		bool ReadBits(int nBits, ref int x) {
+			for (int c; bitBufLen < nBits; bitBufSkip = c == 0xff) {
 				if (byteCount == 0 || (c = bufStr.ReadByte()) == -1)
 					return false;
 				--byteCount;
@@ -1762,13 +1692,12 @@ namespace XPdf {
 					bitBuf = (bitBuf << 8) | (c & 0xff);
 					bitBufLen += 8;
 				}
-				bitBufSkip = c == 0xff;
 			}
 			x = (bitBuf >> (bitBufLen - nBits)) & ((1 << nBits) - 1);
 			bitBufLen -= nBits;
 			return true;
 		}
-		void skipSOP() {
+		void SkipSOP() {
 			// SOP occurs at the start of the packet header, so we don't need to
 			// worry about bit-stuff prior to it
 			var pos = bufStr.Position;
@@ -1781,7 +1710,7 @@ namespace XPdf {
 				bitBufSkip = false;
 			}
 		}
-		void skipEPH() {
+		void SkipEPH() {
 			int k = bitBufSkip ? 1 : 0;
 			var pos = bufStr.Position;
 			byte[] buf = new byte[k + 2];
@@ -1794,7 +1723,7 @@ namespace XPdf {
 				bitBufSkip = false;
 			}
 		}
-		int finishBitBuf() {
+		int FinishBitBuf() {
 			if (bitBufSkip) {
 				bufStr.ReadByte();
 				--byteCount;
@@ -1811,47 +1740,49 @@ namespace XPdf {
 		bool bitBufSkip = false;            // true if next bit should be skipped (for bit stuffing)
 	}
 	public class PBoxJBig2 : XPdfStream {
+		static int GetMaxBit(int n) {
+			return (int)Math.Ceiling(Math.Log(n) / Math.Log(2));
+		}
 		internal class JB2Bmp {
 			internal int height, width, stride;
 			internal byte[] bitmap;
-			internal JB2Bmp(int width, int height) {
-				this.height = height;
-				this.width = width;
-				stride = (width + 7) >> 3;
-				bitmap = new byte[this.height * stride];
+			internal JB2Bmp(int w, int h, bool fillOne = false) {
+				(height, width, stride) = (h, w, (w + 7) >> 3);
+				bitmap = new byte[h * stride];
+				if (fillOne)
+					for (int i = bitmap.Length - 1; i >= 0; i--)
+						bitmap[i] = 0xff;
 			}
-			internal byte getPixel(int x, int y) {
-				int byteIndex = getIdx(x, y), bitOffset = x & 0x07, toShift = 7 - bitOffset;
-				return (byte)((bitmap[byteIndex] >> toShift) & 0x01);
+			internal byte GetPixel(int x, int y) {
+				if (x < 0 || x >= width)	return 0;
+				if (y < 0 || y >= height)	return 0;
+				int idx = GetIdx(x, y), bit = x & 0x07, toShift = 7 - bit;
+				return (byte)((bitmap[idx] >> toShift) & 0x01);
 			}
-			internal void setPixel(int x, int y, byte pixelValue) {
-				int byteIndex = getIdx(x, y), bitOffset = x & 0x07, shift = 7 - bitOffset;
-				bitmap[byteIndex] = (byte)(bitmap[byteIndex] | (pixelValue << shift));
+			internal void SetPixel(int x, int y, byte pix) {
+				int idx = GetIdx(x, y), bit = x & 0x07, shift = 7 - bit;
+				bitmap[idx] = (byte)(bitmap[idx] | (pix << shift));
 			}
-			internal int getIdx(int x, int y) { return y * stride + (x >> 3); }
-			internal int getInt(int index) { return bitmap[index] & 0xff; }
+			internal int GetIdx(int x, int y) { return y * stride + (x >> 3); }
+			internal int GetInt(int index) { return bitmap[index] & 0xff; }
 			internal int Length => bitmap.Length;
-			internal void fillBitmap(byte fillByte) {
-				for (int i = bitmap.Length - 1; i >= 0; i--)
-					bitmap[i] = fillByte;
-			}
-			internal JB2Bmp extract(Rectangle roi) {
+			internal JB2Bmp Extract(Rectangle roi) {
 				JB2Bmp dst = new JB2Bmp(roi.Width, roi.Height);
 				int upShift = roi.X & 0x07, downShift = 8 - upShift, dstLnStart = 0,
-					srcLnStart = getIdx(roi.X, roi.Y), pad = 8 - dst.width & 0x07,
-					srcLnEnd = getIdx(roi.X + roi.Width - 1, roi.Y);
+					srcLnStart = GetIdx(roi.X, roi.Y), pad = 8 - dst.width & 0x07,
+					srcLnEnd = GetIdx(roi.X + roi.Width - 1, roi.Y);
 				bool usePadding = dst.stride == srcLnEnd + 1 - srcLnStart;
 				for (int y = roi.Y; y < roi.Bottom; y++) {
 					int srcIdx = srcLnStart, dstIdx = dstLnStart;
 					if (srcLnStart == srcLnEnd) {
 						byte pixels = (byte)(bitmap[srcIdx] << upShift);
-						dst.bitmap[dstIdx] = unpad(pad, pixels);
+						dst.bitmap[dstIdx] = Unpad(pad, pixels);
 					}
 					else if (upShift == 0)
 						for (int x = srcLnStart; x <= srcLnEnd; x++) {
 							byte value = bitmap[srcIdx++];
 							if (x == srcLnEnd && usePadding)
-								value = unpad(pad, value);
+								value = Unpad(pad, value);
 							dst.bitmap[dstIdx++] = value;
 						}
 					else {
@@ -1861,10 +1792,10 @@ namespace XPdf {
 								byte value = (byte)((uint)bitmap[srcIdx++] << upShift
 												   | ((uint)bitmap[srcIdx] & 0xff) >> downShift);
 								if (isLastByte && !usePadding)
-									value = unpad(pad, value);
+									value = Unpad(pad, value);
 								dst.bitmap[dstIdx++] = value;
 								if (isLastByte && usePadding) {
-									value = unpad(pad, (byte)((bitmap[srcIdx] & 0xff) << upShift));
+									value = Unpad(pad, (byte)((bitmap[srcIdx] & 0xff) << upShift));
 									dst.bitmap[dstIdx] = value;
 								}
 							}
@@ -1873,16 +1804,16 @@ namespace XPdf {
 								dst.bitmap[dstIdx++] = value;
 							}
 					}
-					srcLnStart += stride;
-					srcLnEnd += stride;
-					dstLnStart += dst.stride;
+					srcLnStart	+= stride;
+					srcLnEnd	+= stride;
+					dstLnStart	+= dst.stride;
 				}
 				return dst;
 			}
-			private static byte unpad(int padding, byte value) {
+			static byte Unpad(int padding, byte value) {
 				return (byte)((uint)value >> padding << padding);
 			}
-			internal static byte combineBytes(byte value1, byte value2, ComboOper op) {
+			internal static byte CombineBytes(byte value1, byte value2, ComboOper op) {
 				switch (op) {
 					case ComboOper.OR:		return (byte)(value2 | value1);
 					case ComboOper.AND:		return (byte)(value2 & value1);
@@ -1910,7 +1841,7 @@ namespace XPdf {
 					lnStart = height + y - dst.height;
 				int shiftVal1 = x & 0x07, shiftVal2 = 8 - shiftVal1,
 					padding = width & 0x07, toShift = shiftVal2 - padding,
-					dstStart = dst.getIdx(x, y),
+					dstStart = dst.GetIdx(x, y),
 					lastLine = Math.Min(height, lnStart + dst.height);
 				bool useShift = (shiftVal2 & 0x07) != 0;
 				bool specialCase = width <= ((srcEnd - srcStart) << 3) + shiftVal2;
@@ -1924,37 +1855,37 @@ namespace XPdf {
 							Array.Copy(bitmap, srcIdx, dst.bitmap, dstIdx, count);
 						else
 							while (count-- > 0)
-								dst.bitmap[dstIdx] = combineBytes(bitmap[srcIdx++], dst.bitmap[dstIdx++], op);
+								dst.bitmap[dstIdx] = CombineBytes(bitmap[srcIdx++], dst.bitmap[dstIdx++], op);
 					}
 				}
 				else if (specialCase)
 					for (int dstLine = lnStart; dstLine < lastLine; dstLine++,
 							dstStart += dst.stride, srcStart += stride, srcEnd += stride) {
-						int register = 0, dstIdx = dstStart;
+						int reg = 0, dstIdx = dstStart;
 						for (int srcIdx = srcStart; srcIdx <= srcEnd; srcIdx++) {
-							register = (register | bitmap[srcIdx] & 0xff) << shiftVal2;
-							byte oldByte = dst.bitmap[dstIdx], newByte = (byte)(register >> 8);
+							reg = (reg | bitmap[srcIdx] & 0xff) << shiftVal2;
+							byte oldByte = dst.bitmap[dstIdx], newByte = (byte)(reg >> 8);
 							if (srcIdx == srcEnd)
-								newByte = unpad(toShift, newByte);
-							dst.bitmap[dstIdx++] = combineBytes(oldByte, newByte, op);
-							register <<= shiftVal1;
+								newByte = Unpad(toShift, newByte);
+							dst.bitmap[dstIdx++] = CombineBytes(oldByte, newByte, op);
+							reg <<= shiftVal1;
 						}
 					}
 				else
 					for (int dstLine = lnStart; dstLine < lastLine; dstLine++, dstStart += dst
 							.stride, srcStart += stride, srcEnd += stride) {
-						int register = 0, dstIdx = dstStart;
+						int reg = 0, dstIdx = dstStart;
 						for (int srcIdx = srcStart; srcIdx <= srcEnd; srcIdx++) {
-							register = (register | bitmap[srcIdx] & 0xff) << shiftVal2;
-							byte oldByte = dst.bitmap[dstIdx], newByte = (byte)((uint)register >> 8);
-							dst.bitmap[dstIdx++] = combineBytes(oldByte, newByte, op);
-							register <<= shiftVal1;
+							reg = (reg | bitmap[srcIdx] & 0xff) << shiftVal2;
+							byte oldByte = dst.bitmap[dstIdx], newByte = (byte)((uint)reg >> 8);
+							dst.bitmap[dstIdx++] = CombineBytes(oldByte, newByte, op);
+							reg <<= shiftVal1;
 							if (srcIdx == srcEnd) {
-								newByte = (byte)((uint)register >> (8 - shiftVal2));
+								newByte = (byte)((uint)reg >> (8 - shiftVal2));
 								if (padding != 0)
-									newByte = unpad(8 + toShift, newByte);
+									newByte = Unpad(8 + toShift, newByte);
 								oldByte = dst.bitmap[dstIdx];
-								dst.bitmap[dstIdx] = combineBytes(oldByte, newByte, op);
+								dst.bitmap[dstIdx] = CombineBytes(oldByte, newByte, op);
 							}
 						}
 					}
@@ -1986,7 +1917,7 @@ namespace XPdf {
 				}
 				internal Code(Code oth) :
 					this(oth.prefixLen, oth.rngLen, oth.rngLow, oth.isLowRng) { }
-				internal virtual long decode(ImgStream iis) { return long.MaxValue; }
+				internal virtual long Decode(ImgStream iis) { return long.MaxValue; }
 			}
 			internal class InternalNode : Code {
 				int depth;
@@ -1994,38 +1925,38 @@ namespace XPdf {
 				internal InternalNode(int depth = 0) {
 					this.depth = depth;
 				}
-				internal void append(Code c) {
+				internal void Append(Code c) {
 					if (c.prefixLen == 0)            // ignore unused codes
 						return;
 					int shift = c.prefixLen - 1 - depth, bit = (c.code >> shift) & 1;
 					if (shift < 0)
 						throw new Exception("Negative shifting is not possible.");
-					if (bit == 1) setNode(ref one, c, shift);
-					else setNode(ref zero, c, shift);
+					if (bit == 1) SetNode(ref one, c, shift);
+					else SetNode(ref zero, c, shift);
 				}
-				void setNode(ref Code dst, Code c, int shift) {
+				void SetNode(ref Code dst, Code c, int shift) {
 					Code n = null;
 					if (shift == 0)
 						n = (c.rngLen == -1) ? new Code(c) : new ValueNode(c);
 					else {
 						if (dst == null) n = new InternalNode(depth + 1);
-						((InternalNode)(n ?? dst)).append(c);
+						((InternalNode)(n ?? dst)).Append(c);
 					}
 					if (n != null && dst != null)
 						throw new Exception("Node already have a value");
 					dst = dst ?? n;
 				}
-				internal override long decode(ImgStream iis) {
-					return (iis.readBits(1) == 0 ? zero : one).decode(iis);
+				internal override long Decode(ImgStream iis) {
+					return (iis.ReadBits(1) == 0 ? zero : one).Decode(iis);
 				}
 			}
 			internal class ValueNode : Code {
 				internal ValueNode(Code c) : base(c) { }
-				internal override long decode(ImgStream iis) {
-					return rngLow + (isLowRng ? -iis.readBits(rngLen) : iis.readBits(rngLen));
+				internal override long Decode(ImgStream iis) {
+					return rngLow + (isLowRng ? -iis.ReadBits(rngLen) : iis.ReadBits(rngLen));
 				}
 			}
-			private static int[][][] TABLES = new int[][][] {	// B1
+			static readonly int[][][] TABLES = new int[][][] {	// B1
 				new int[][] {
 					new int[] { 1, 4, 0 }, new int[] { 2, 8, 16 }, new int[] { 3, 16, 272 }, new int[] { 3, 32, 65808 }
 				},  new int[][] {	// B2
@@ -2048,7 +1979,7 @@ namespace XPdf {
             			new int[]{ 7, 4, -21 }, new int[]{ 8, 0, -5 }, new int[]{ 7, 0, -4 }, new int[]{ 5, 0, -3 }, new int[]{ 2, 2, -2 }, new int[]{ 5, 0, 2 }, new int[]{ 6, 0, 3 }, new int[]{ 7, 0, 4 }, new int[]{ 8, 0, 5 }, new int[]{ 2, 6, 6 }, new int[]{ 5, 5, 70 }, new int[]{ 6, 5, 102 }, new int[]{ 6, 6, 134 }, new int[]{ 6, 7, 198 }, new int[]{ 6, 8, 326 }, new int[]{ 6, 9, 582 }, new int[]{ 6, 10, 1094 }, new int[]{ 7, 11, 2118 }, new int[]{ 8, 32, -22, 999 }, new int[]{ 8, 32, 4166 }, new int[]{ 2, -1, 0 }
 				}, new int[][] { // B11
             			new int[]{ 1, 0, 1 }, new int[]{ 2, 1, 2 }, new int[]{ 4, 0, 4 }, new int[]{ 4, 1, 5 }, new int[]{ 5, 1, 7 }, new int[]{ 5, 2, 9 }, new int[]{ 6, 2, 13 }, new int[]{ 7, 2, 17 }, new int[]{ 7, 3, 21 }, new int[]{ 7, 4, 29 }, new int[]{ 7, 5, 45 }, new int[]{ 7, 6, 77 }, new int[]{ 7, 32, 141 }
-					}, new int[][] { // B12
+				}, new int[][] { // B12
             			new int[]{ 1, 0, 1 }, new int[]{ 2, 0, 2 }, new int[]{ 3, 1, 3 }, new int[]{ 5, 0, 5 }, new int[]{ 5, 1, 6 }, new int[]{ 6, 1, 8 }, new int[]{ 7, 0, 10 }, new int[]{ 7, 1, 11 }, new int[]{ 7, 2, 13 }, new int[]{ 7, 3, 17 }, new int[]{ 7, 4, 25 }, new int[]{ 8, 5, 41 }, new int[]{ 8, 32, 73 } //
 				}, new int[][] { // B13
             			new int[]{ 1, 0, 1 }, new int[]{ 3, 0, 2 }, new int[]{ 4, 0, 3 }, new int[]{ 5, 0, 4 }, new int[]{ 4, 1, 5 }, new int[]{ 3, 3, 7 }, new int[]{ 6, 1, 15 }, new int[]{ 6, 2, 17 }, new int[]{ 6, 3, 21 }, new int[]{ 6, 4, 29 }, new int[]{ 6, 5, 45 }, new int[]{ 7, 6, 77 }, new int[]{ 7, 32, 141 }
@@ -2057,33 +1988,30 @@ namespace XPdf {
 				}, new int[][] { // B15
 						new int[]{ 7, 4, -24 }, new int[]{ 6, 2, -8 }, new int[]{ 5, 1, -4 }, new int[]{ 4, 0, -2 }, new int[]{ 3, 0, -1 }, new int[]{ 1, 0, 0 }, new int[]{ 3, 0, 1 }, new int[]{ 4, 0, 2 }, new int[]{ 5, 1, 3 }, new int[]{ 6, 2, 5 }, new int[]{ 7, 4, 9 }, new int[]{ 7, 32, -25, 999 }, new int[]{ 7, 32, 25 }
 			} };
-			private static HuffmanTable[] STANDARD_TABLES = new HuffmanTable[TABLES.Length];
-			private InternalNode rootNode = new InternalNode();
-			internal void initTree(List<Code> codeTable) {
-				int maxPrefixLength = codeTable.Max(x => x.prefixLen); /* Annex B.3 1) - build the histogram */
+			static HuffmanTable[] STANDARD_TABLES = new HuffmanTable[TABLES.Length];
+			InternalNode rootNode = new InternalNode();
+			internal long Decode(ImgStream iis) {
+				return rootNode.Decode(iis);
+			}
+			public HuffmanTable(List<Code> codes = null) {
+				if (codes == null) return;
+				int maxPrefixLength = codes.Max(x => x.prefixLen); /* Annex B.3 1) - build the histogram */
 				int[] lenCount = new int[maxPrefixLength + 1];
-				foreach (Code c in codeTable)
+				foreach (Code c in codes)
 					lenCount[c.prefixLen]++;
-				int[] firstCode = new int[lenCount.Length + 1];
-				lenCount[0] = 0;                    /* Annex B.3 3) */
+				int[] code1 = new int[lenCount.Length + 1];
+				lenCount[0] = 0;							      /* Annex B.3 3) */
 				for (int curLen = 1; curLen <= lenCount.Length; curLen++) {
-					firstCode[curLen] = (firstCode[curLen - 1] + (lenCount[curLen - 1]) << 1);
-					int curCode = firstCode[curLen];
-					foreach (Code code in codeTable)
+					code1[curLen] = (code1[curLen - 1] + (lenCount[curLen - 1]) << 1);
+					int curCode = code1[curLen];
+					foreach (Code code in codes)
 						if (code.prefixLen == curLen)
 							code.code = curCode++;
 				}
-				foreach (Code c in codeTable)
-					rootNode.append(c);
+				foreach (Code c in codes)
+					rootNode.Append(c);
 			}
-			internal long decode(ImgStream iis) {
-				return rootNode.decode(iis);
-			}
-			public HuffmanTable(List<Code> codes = null) {
-				if (codes != null)
-					initTree(codes);
-			}
-			public static HuffmanTable getStdTbl(int number) {
+			public static HuffmanTable GetStdTbl(int number) {
 				HuffmanTable table = STANDARD_TABLES[number - 1];
 				if (table == null) {
 					var iniVals = TABLES[number - 1].Select(x => new Code(x[0], x[1], x[2], x.Length > 3));
@@ -2099,13 +2027,13 @@ namespace XPdf {
 				CODE_VR1 = 3, CODE_VR2 = 4, CODE_VR3 = 5, CODE_VL1 = 6, CODE_VL2 = 7, CODE_VL3 = 8,
 				CODE_EXT2D = 9, CODE_EXT1D = 10;
 			// --------------------------------------------------------------------------------------------------------------
-			static int[][] ModeCodes = new int[][] {
+			static readonly int[][] ModeCodes = new int[][] {
 				new int[] { 4, 0x1, CODE_P }, new int[] { 3, 0x1, CODE_H }, new int[] { 1, 0x1, CODE_V0 },
 				new int[] { 3, 0x3, CODE_VR1 }, new int[] { 6, 0x3, CODE_VR2 }, new int[] { 7, 0x3, CODE_VR3 },
 				new int[] { 3, 0x2, CODE_VL1 }, new int[] { 6, 0x2, CODE_VL2 }, new int[] { 7, 0x2, CODE_VL3 },
 				new int[] { 10, 0xf, CODE_EXT2D }, new int[] { 12, 0xf, CODE_EXT1D }, new int[] { 12, 0x1, EOL }
 			};
-			static int[][] WhiteCodes = {
+			static readonly int[][] WhiteCodes = {
 				new int[] { 4, 0x07, 2 }, new int[] { 4, 0x08, 3 }, new int[] { 4, 0x0B, 4 }, new int[] { 4, 0x0C, 5 },
 				new int[] { 4, 0x0E, 6 }, new int[] { 4, 0x0F, 7 }, new int[] { 5, 0x12, 128 }, new int[] { 5, 0x13, 8 },
 				new int[] { 5, 0x14, 9 }, new int[] { 5, 0x1B, 64 }, new int[] { 5, 0x07, 10 }, new int[] { 5, 0x08, 11 },
@@ -2136,7 +2064,7 @@ namespace XPdf {
 				new int[] { 12, 0x17, 2304 }, new int[] { 12, 0x1C, 2368 }, new int[] { 12, 0x1D, 2432 },
 				new int[] { 12, 0x1E, 2496 }, new int[] { 12, 0x1F, 2560 }
 			};
-			static int[][] BlackCodes = {
+			static readonly int[][] BlackCodes = {
 				new int[] { 2, 0x02, 3 }, new int[] { 2, 0x03, 2 }, new int[] { 3, 0x02, 1 }, new int[] { 3, 0x03, 4 },
 				new int[] { 4, 0x02, 6 }, new int[] { 4, 0x03, 5 }, new int[] { 5, 0x03, 7 }, new int[] { 6, 0x04, 9 },
 				new int[] { 6, 0x05, 8 }, new int[] { 7, 0x04, 10 }, new int[] { 7, 0x05, 11 }, new int[] { 7, 0x07, 12 },
@@ -2170,11 +2098,14 @@ namespace XPdf {
 			// A class encapsulating the compressed raw data.
 			internal class MMRCode {
 				internal MMRCode[] subTable = null;
-				internal int bitLength, codeWord, runLength;
+				internal int bitLength, codeWord, runLen;
 				internal MMRCode(int[] codeData) {
-					(bitLength, codeWord, runLength) = (codeData[0], codeData[1], codeData[2]);
+					(bitLength, codeWord, runLen) = (codeData[0], codeData[1], codeData[2]);
 				}
 			}
+			static readonly MMRCode[]	whiteTable	= InitTable(WhiteCodes),
+										blackTable	= InitTable(BlackCodes),
+										modeTable	= InitTable(ModeCodes);
 			internal class RunData {
 				internal ImgStream stream;      /** Compressed data stream. */
 				internal int offset, lstOffset = 0, lstCode = 0, bufBase, bufTop, iniPos, maxLen;
@@ -2186,15 +2117,15 @@ namespace XPdf {
 					try {
 						maxLen = (int)len;
 						buffer = new byte[(int)Math.Min(Math.Max(3, len), 1 << 17)];
-						fillBuffer(0);
+						FillBuffer(0);
 					}
 					catch (IOException e) {
 						buffer = new byte[10];
-						error(e.ToString(), false);
+						Error(e.ToString(), false);
 					}
 				}
-				internal MMRCode uncompressGetCode(MMRCode[] table) {
-					int code = uncompressGetNextCodeLittleEndian() & 0xffffff;
+				internal MMRCode UncompressGetCode(MMRCode[] table) {
+					int code = UncompressGetNextCodeLittleEndian() & 0xffffff;
 					MMRCode res = table[code >> CodeOffset - Lvl1TblSize];
 					if (null != res && null != res.subTable)  // perform second-level lookup
 						res = res.subTable[(code >> CodeOffset - Lvl1TblSize - Lvl2TblSize) & Lbl2Mask];
@@ -2204,29 +2135,29 @@ namespace XPdf {
 				// For the frequent cases (i.e. short words) we try to get away with as little work as possible. <br>
 				// This method returns code words of 16 bits, which are aligned to the 24th bit. The lowest 8 bits are used as a
 				// "queue" of bits so that an access to the actual data is only needed, when this queue becomes empty.
-				private int uncompressGetNextCodeLittleEndian() {
+				int UncompressGetNextCodeLittleEndian() {
 					try {
-						int bitsToFill = offset - lstOffset;           // the # of bits to fill (offset difference)
-						if (bitsToFill < 0 || bitsToFill > 24) {        // refill at absolute offset
-							int byteOffset = (offset >> 3) - bufBase;// offset>>3 is equivalent to offset/8
+						int bitsToFill = offset - lstOffset;			// the # of bits to fill (offset difference)
+						if (bitsToFill < 0 || bitsToFill > 24) {		// refill at absolute offset
+							int byteOffset = (offset >> 3) - bufBase;	// offset>>3 is equivalent to offset/8
 							if (byteOffset >= bufTop) {
-								fillBuffer(byteOffset += bufBase);
+								FillBuffer(byteOffset += bufBase);
 								byteOffset -= bufBase;
 							}
 							lstCode = (buffer[byteOffset] & 0xff) << 16
 									| (buffer[byteOffset + 1] & 0xff) << 8
 									| (buffer[byteOffset + 2] & 0xff);
-							lstCode <<= offset & 7; // equivalent to offset%8
+							lstCode <<= offset & 7;						// equivalent to offset%8
 						}
 						else {
-							int bitOffset = lstOffset & 7;     // the offset to the next byte boundary 
-							if (bitsToFill <= 7 - bitOffset)    // check whether there are enough bits 
-								lstCode <<= bitsToFill;        // in the "queue"
+							int bitOffset = lstOffset & 7;		// the offset to the next byte 
+							if (bitsToFill <= 7 - bitOffset)	// boundary check whether there 
+								lstCode <<= bitsToFill;			// are enough bits in the "queue"
 							else {
 								int byteOffset = (lstOffset >> 3) + 3 - bufBase;
 								if (byteOffset >= bufTop) {
 									byteOffset += bufBase;
-									fillBuffer(byteOffset);
+									FillBuffer(byteOffset);
 									byteOffset -= bufBase;
 								}
 								bitOffset = 8 - bitOffset;
@@ -2237,7 +2168,7 @@ namespace XPdf {
 									byteOffset++;
 									bitOffset = 8;
 								} while (bitsToFill >= 8);
-								lstCode <<= bitsToFill; // shift the rest
+								lstCode <<= bitsToFill;			// shift the rest
 							}
 						}
 						lstOffset = offset;
@@ -2247,11 +2178,11 @@ namespace XPdf {
 						throw new IndexOutOfRangeException("Corrupted RLE data caused by an IOException while reading raw data: " + e.ToString());
 					}
 				}
-				private void fillBuffer(int byteOffset) {
+				void FillBuffer(int byteOffset) {
 					bufBase = byteOffset;
 					if (byteOffset < maxLen)
 						try {
-							stream.Seek(iniPos + byteOffset);
+							stream.Seek(iniPos + byteOffset, SeekOrigin.Begin);
 							bufTop = stream.Read(buffer, 0, buffer.Length - bufBase);
 							for (int ml = Math.Min(3, buffer.Length); bufTop < ml; bufTop++)
 								buffer[bufTop] = 0;
@@ -2265,171 +2196,159 @@ namespace XPdf {
 						bufTop = buffer.Length - 3;
 					}
 				}
-				internal void align() {                 // Skip to next byte
+				internal void Align() {                 // Skip to next byte
 					offset = ((offset + 7) >> 3) << 3;
 				}
 			}
-			static MMRCode[] whiteTable = null, blackTable = null, modeTable = null;
 			internal RunData data;
-			int uncompress2D(RunData runData, int[] refOffsets, int refRunLen, int[] runOffsets, int width) {
-				int refBufIdx = 0, curBufIdx = 0, curLnBitPos = 0;
+			int Uncompress2D(RunData runData, int[] refOffsets, int refRunLen, int[] runOffsets, int width) {
+				int refIdx = 0, curIdx = 0, bitPos = 0;
 				bool whiteRun = true; // Always start with a white run
 				MMRCode code = null; // Storage var for current code being processed
 				refOffsets[refRunLen] = refOffsets[refRunLen + 1] = width;
 				refOffsets[refRunLen + 2] = refOffsets[refRunLen + 3] = width + 1;
 				try {
-					while (curLnBitPos < width) {
-						code = runData.uncompressGetCode(modeTable);    // Get the mode code
+					while (bitPos < width) {
+						code = runData.UncompressGetCode(modeTable);    // Get the mode code
 						if (code == null) {
 							runData.offset++;
 							break;
 						}
 						runData.offset += code.bitLength;               // Add the code length to the bit offset
-						switch (code.runLength) {
-							case CODE_V0: curLnBitPos = refOffsets[refBufIdx]; break;
-							case CODE_VR1: curLnBitPos = refOffsets[refBufIdx] + 1; break;
-							case CODE_VL1: curLnBitPos = refOffsets[refBufIdx] - 1; break;
-							case CODE_VR2: curLnBitPos = refOffsets[refBufIdx] + 2; break;
-							case CODE_VL2: curLnBitPos = refOffsets[refBufIdx] - 2; break;
-							case CODE_VR3: curLnBitPos = refOffsets[refBufIdx] + 3; break;
-							case CODE_VL3: curLnBitPos = refOffsets[refBufIdx] - 3; break;
+						switch (code.runLen) {
+							case CODE_V0 : bitPos = refOffsets[refIdx];		break;
+							case CODE_VR1: bitPos = refOffsets[refIdx] + 1;	break;
+							case CODE_VL1: bitPos = refOffsets[refIdx] - 1;	break;
+							case CODE_VR2: bitPos = refOffsets[refIdx] + 2;	break;
+							case CODE_VL2: bitPos = refOffsets[refIdx] - 2;	break;
+							case CODE_VR3: bitPos = refOffsets[refIdx] + 3;	break;
+							case CODE_VL3: bitPos = refOffsets[refIdx] - 3;	break;
 							case CODE_P:
-								refBufIdx++;
-								curLnBitPos = refOffsets[refBufIdx++];
+								refIdx++;
+								bitPos = refOffsets[refIdx++];
 								continue;
 							case CODE_H:
 								for (int ever = 1; ever > 0;) {
-									code = runData.uncompressGetCode(whiteRun ? whiteTable : blackTable);
+									code = runData.UncompressGetCode(whiteRun ? whiteTable : blackTable);
 									if (code == null)
 										goto loopDone;
 									runData.offset += code.bitLength;
-									if (code.runLength < 64) {
-										if (code.runLength < 0) {
-											runOffsets[curBufIdx++] = curLnBitPos;
+									if (code.runLen < 64) {
+										if (code.runLen < 0) {
+											runOffsets[curIdx++] = bitPos;
 											code = null;
 											goto loopDone;
 										}
-										curLnBitPos += code.runLength;
-										runOffsets[curBufIdx++] = curLnBitPos;
+										bitPos += code.runLen;
+										runOffsets[curIdx++] = bitPos;
 										break;
 									}
-									curLnBitPos += code.runLength;
+									bitPos += code.runLen;
 								}
-								for (int ever1 = 1, HalfBitPos1 = curLnBitPos; ever1 > 0;) {
-									code = runData.uncompressGetCode(!whiteRun ? whiteTable : blackTable);
+								for (int ever1 = 1, HalfBitPos1 = bitPos; ever1 > 0;) {
+									code = runData.UncompressGetCode(!whiteRun ? whiteTable : blackTable);
 									if (code == null)
 										goto loopDone;
 									runData.offset += code.bitLength;
-									if (code.runLength < 64) {
-										if (code.runLength < 0) {
-											runOffsets[curBufIdx++] = curLnBitPos;
+									if (code.runLen < 64) {
+										if (code.runLen < 0) {
+											runOffsets[curIdx++] = bitPos;
 											goto loopDone;
 										}
-										curLnBitPos += code.runLength;
+										bitPos += code.runLen;
 										// don't generate 0-length run at EOL for cases where the line ends in an H-run.
-										if (curLnBitPos < width || curLnBitPos != HalfBitPos1)
-											runOffsets[curBufIdx++] = curLnBitPos;
+										if (bitPos < width || bitPos != HalfBitPos1)
+											runOffsets[curIdx++] = bitPos;
 										break;
 									}
-									curLnBitPos += code.runLength;
+									bitPos += code.runLen;
 								}
-								while (curLnBitPos < width && refOffsets[refBufIdx] <= curLnBitPos)
-									refBufIdx += 2;
+								while (bitPos < width && refOffsets[refIdx] <= bitPos)
+									refIdx += 2;
 								continue;
 							case EOL:
 							default:        // Possibly MMR Decoded
-								error("Should not happen!", false);
-								if (runData.offset == 12 && code.runLength == EOL) {
+								Error("Should not happen!", false);
+								if (runData.offset == 12 && code.runLen == EOL) {
 									runData.offset = 0;
-									uncompress1D(runData, refOffsets, width);
+									Uncompress1D(runData, refOffsets, width);
 									runData.offset++;
-									uncompress1D(runData, runOffsets, width);
-									int retCode = uncompress1D(runData, refOffsets, width);
+									Uncompress1D(runData, runOffsets, width);
+									int retCode = Uncompress1D(runData, refOffsets, width);
 									runData.offset++;
 									return retCode;
 								}
-								curLnBitPos = width;
+								bitPos = width;
 								continue;
 						}
-						if (curLnBitPos <= width) { // Only vertical modes get this far
+						if (bitPos <= width) { // Only vertical modes get this far
 							whiteRun = !whiteRun;
-							runOffsets[curBufIdx++] = curLnBitPos;
-							refBufIdx += (refBufIdx > 0 ? -1 : 1);
-							while (curLnBitPos < width && refOffsets[refBufIdx] <= curLnBitPos)
-								refBufIdx += 2;
+							runOffsets[curIdx++] = bitPos;
+							refIdx += (refIdx > 0 ? -1 : 1);
+							while (bitPos < width && refOffsets[refIdx] <= bitPos)
+								refIdx += 2;
 						}
 					}
 				loopDone:
-					refBufIdx = 0; // compiler warning
+					refIdx = 0; // compiler warning
 				}
 				catch (Exception t) {
-					error(t.ToString(), false);
+					Error(t.ToString(), false);
 					return EOF;
 				}
-				if (runOffsets[curBufIdx] != width)
-					runOffsets[curBufIdx] = width;
-				return (code == null) ? EOL : curBufIdx;
+				if (runOffsets[curIdx] != width)
+					runOffsets[curIdx] = width;
+				return (code == null) ? EOL : curIdx;
 			}
 			internal MMRDecompressor(int width, int height, ImgStream stream, long len) {
 				this.width = width;
 				this.height = height;
 				data = new RunData(stream, len);
-				if (null == whiteTable) {
-					whiteTable = createLittleEndianTable(WhiteCodes);
-					blackTable = createLittleEndianTable(BlackCodes);
-					modeTable = createLittleEndianTable(ModeCodes);
-				}
 			}
-			internal JB2Bmp uncompress() {
-				JB2Bmp result = new JB2Bmp(width, height);
+			internal JB2Bmp Uncompress() {
+				JB2Bmp bmp = new JB2Bmp(width, height);
 				int[] curOff = new int[width + 5], refOff = new int[width + 5];
 				refOff[0] = width;
 				int line = 0, refRunLen = 1, count;
 				for (; line < height; line++, refRunLen = count) {
-					if (EOF == (count = uncompress2D(data, refOff, refRunLen, curOff, width)))
+					if (EOF == (count = Uncompress2D(data, refOff, refRunLen, curOff, width)))
 						break;
-					if (count > 0)
-						fillBitmap(result, line, curOff, count);
-					(refOff, curOff) = (curOff, refOff);
-				}
-				while (true) {
-					MMRCode code = data.uncompressGetCode(modeTable);
-					if (null != code && code.runLength == EOL)
-						data.offset += code.bitLength;
-					else
-						break;
-				}
-				data.align();
-				return result;
-			}
-			void fillBitmap(JB2Bmp result, int line, int[] currentOffsets, int count) {
-				int x = 0, targetByte = result.getIdx(0, line);
-				byte dstByteVal = 0;
-				for (int index = 0; index < count; index++)
-					for (int offset = currentOffsets[index], value = (index & 1); x < offset;) {
-						dstByteVal = (byte)((dstByteVal << 1) | value);
-						if ((++x & 7) == 0) {
-							result.bitmap[targetByte++] = dstByteVal;
-							dstByteVal = 0;
+					if (count > 0) {
+						int x = 0, dstIdx = bmp.GetIdx(0, line);
+						byte dstVal = 0;
+						for (int i = 0; i < count; i++)
+							for (int off = curOff[i], val = (i & 1); x < off;) {
+								dstVal = (byte)((dstVal << 1) | val);
+								if ((++x & 7) == 0) {
+									bmp.bitmap[dstIdx++] = dstVal;
+									dstVal = 0;
+								}
+							}
+						if ((x & 7) != 0) {
+							dstVal <<= 8 - (x & 7);
+							bmp.bitmap[dstIdx] = dstVal;
 						}
 					}
-				if ((x & 7) != 0) {
-					dstByteVal <<= 8 - (x & 7);
-					result.bitmap[targetByte] = dstByteVal;
+					(refOff, curOff) = (curOff, refOff);		// swap
 				}
+				for (MMRCode c; true; data.offset += c.bitLength) 
+					if ((c = data.UncompressGetCode(modeTable)) == null || c.runLen != EOL)
+						break;
+				data.Align();
+				return bmp;
 			}
-			int uncompress1D(RunData runData, int[] runOffsets, int width) {
+			int Uncompress1D(RunData runData, int[] runOffsets, int width) {
 				bool whiteRun = true;               // should not get here !!!!!
 				MMRCode code = null;
 				int iBitPos = 0, refOffset = 0;
-				while (iBitPos < width)
+				for (; iBitPos < width; )
 					while (true) {
-						code = runData.uncompressGetCode(whiteRun ? whiteTable : blackTable);
+						code = runData.UncompressGetCode(whiteRun ? whiteTable : blackTable);
 						runData.offset += code.bitLength;
-						if (code.runLength < 0)
+						if (code.runLen < 0)
 							goto loop;
-						iBitPos += code.runLength;
-						if (code.runLength < 64) {
+						iBitPos += code.runLen;
+						if (code.runLen < 64) {
 							whiteRun = !whiteRun;
 							runOffsets[refOffset++] = iBitPos;
 							break;
@@ -2438,9 +2357,9 @@ namespace XPdf {
 				loop:
 				if (runOffsets[refOffset] != width)
 					runOffsets[refOffset] = width;
-				return code != null && code.runLength != EOL ? refOffset : EOL;
+				return code != null && code.runLen != EOL ? refOffset : EOL;
 			}
-			static MMRCode[] createLittleEndianTable(int[][] codes) {
+			static MMRCode[] InitTable(int[][] codes) {
 				MMRCode[] lvl1Tbl = new MMRCode[Lvl1Mark + 1];
 				for (int i = 0; i < codes.Length; i++) {
 					MMRCode code = new MMRCode(codes[i]);
@@ -2469,50 +2388,46 @@ namespace XPdf {
 		}
 		internal enum ComboOper { OR = 0, AND = 1, XOR = 2, XNOR = 3, REPLACE = 4 }
 		internal class SegmentHeader {
-			internal int segNo, segType, pgAssoc;
-			internal long DataLen, DataStart;
-			private SegmentHeader[] rtSegments;
-			private ImgStream	imgStrm;
-			private SegmentData segData;
+			ImgStream		imgStrm;
+			SegmentData		segData;
+			internal int	segNo, segType, pgAssoc;
+			internal long	DataLen, DataStart;
+			internal SegmentHeader[] rtSegments;
 			internal SegmentHeader(PBoxJBig2 document, ImgStream sis, long offset) {
 				imgStrm = sis;
-				sis.Seek(offset);
-				segNo = sis.readInt(4);
-				sis.readBits(1);   // Bit 7: if 1, this segment is retained;
-								   // Bit 6: Size of the page association field. One byte if 0, four bytes if 1;
-				bool pgAssocFldSz = (byte)sis.readBits(1) != 0;
-				// Bit 5-0: Contains the values (between 0 and 62 with gaps) for segment types, specified in 7.3
-				segType = sis.readBits(6) & 0xff;
+				sis.Seek(offset, SeekOrigin.Begin);
+				segNo = sis.ReadInt(4);
+				int segFlags = sis.ReadByte();
+				segType = segFlags & 0x3f;
 				/* 7.2.4 Amount of referred-to segments */
-				int countOfRTS = sis.readBits(3) & 0xf, arrayLength = 5;
+				int countOfRTS = sis.ReadBits(3) & 0xf, arrayLength = 5;
 				if (countOfRTS > 4) {                       /* long format */
-					countOfRTS = (int)(sis.readBits(29) & 0xffffffff);
+					countOfRTS = (int)(sis.ReadBits(29) & 0xffffffff);
 					arrayLength = (countOfRTS + 8) >> 3;
 				}
 				for (int i = 0; i < arrayLength; i++)
-					sis.readBits(1);
+					sis.ReadBits(1);
 				int[] rtsNumbers = new int[countOfRTS];     /* 7.2.5 Referred-to segments numbers */
 				if (countOfRTS > 0) {
 					int rtsSize = (segNo > 65536) ? 4 : (segNo > 256 ? 2 : 1);
 					rtSegments = new SegmentHeader[countOfRTS];
 					for (int i = 0; i < countOfRTS; i++)
-						rtsNumbers[i] = sis.readInt(rtsSize);
+						rtsNumbers[i] = sis.ReadInt(rtsSize);
 				}
 				/* 7.2.6 Segment page association (Checks how big the page association field is.) */
-				pgAssoc = pgAssocFldSz ? sis.readInt(4) : sis.readInt(1);
+				pgAssoc = sis.ReadInt((segFlags & 0x40) != 0 ? 4 : 1);
 				if (countOfRTS > 0) {
-					JBIG2Page page = document.getPage(pgAssoc);
+					JBIG2Page page = document.GetPage(pgAssoc);
 					for (int i = 0; i < countOfRTS; i++)
 						rtSegments[i] = null != page
-							? page.getSegment(rtsNumbers[i]) : document.getGlobalSegment(rtsNumbers[i]);
+							? page.GetSegment(rtsNumbers[i]) : document.GetGlobalSegment(rtsNumbers[i]);
 				}
-				DataLen = sis.readInt(4);
+				DataLen = sis.ReadInt(4);
 				DataStart = sis.Position;					// for rand get later 
 				if ((int)DataLen == -1)						// overwritten in the MapStream
 					DataLen = sis.Length - sis.Position;
 			}
-			internal SegmentHeader[] getRtSegments() { return rtSegments; }
-			internal SegmentData getSegData() {
+			internal SegmentData GetSegData() {
 				if (null != segData)
 					return segData;
 				switch (segType) {
@@ -2528,90 +2443,89 @@ namespace XPdf {
 					case 53:					segData = new Table();				break;
 					default: throw new ArgumentException("No segment class for type " + segType);
 				}
-				segData.init(this, new ImgStream(imgStrm, DataStart, DataLen));
+				segData.Init(this, new ImgStream(imgStrm, DataStart, DataLen));
 				return segData;
+			}
+			internal HuffmanTable GetUserTable(params int[] prm) {
+				int c = prm.Where(x => x == 3).Count();
+				return rtSegments.Where(x => x.segType == 53).Skip(c)
+					.Select(x => ((Table)x.GetSegData()).GetHuffTbl()).FirstOrDefault();
 			}
 		}
 		internal class SegmentData {
 			protected SegmentHeader segHdr;
 			internal long		dataOffset, dataLength;
 			internal ImgStream	imgStrm;
-			protected ComboOper comboOper;
-			internal virtual void init(SegmentHeader header, ImgStream sis) {
+			internal ComboOper	comboOper;
+			internal virtual void Init(SegmentHeader header, ImgStream sis) {
 				imgStrm = sis;
 				segHdr = header;
 			}
-			internal virtual List<JB2Bmp> getDictionary() { return null; }
-			public ComboOper getComboOper() { return comboOper; }
+			internal virtual List<JB2Bmp> GetDictionary() { return null; }
 		}
 		internal class EndOfStripe : SegmentData {
 			internal int lineNum;
-			internal override void init(SegmentHeader header, ImgStream sis) {
-				base.init(header, sis);
-				lineNum = imgStrm.readInt(4);
+			internal override void Init(SegmentHeader header, ImgStream sis) {
+				base.Init(header, sis);
+				lineNum = imgStrm.ReadInt(4);
 			}
 		}
 		internal class PageInformation : SegmentData {
-			internal int width, height, defPix;
+			internal int width, height;
 			/** Page segment flags, one byte, 7.4.8.5 */
-			internal bool comboOperOverrideAllow, reqAuxBuf, hasRefine, isLossless, isStriped;
-			internal override void init(SegmentHeader header, ImgStream sis) {
-				base.init(header, sis);
-				width		= imgStrm.readInt(4);
-				height		= imgStrm.readInt(4);
-				imgStrm.readInt(4);                                 // resolutionX & 0xffffffff);
-				imgStrm.readInt(4);                                 // resolutionY & 0xffffffff);
-				imgStrm.readBits(1);                                // dirty read
-				comboOperOverrideAllow = (imgStrm.readBits(1) == 1);/* Bit 6 */
-				reqAuxBuf	= imgStrm.readBits(1) == 1;             /* Bit 5 */
-				comboOper	= (ComboOper)(imgStrm.readBits(2) & 0xf); /* Bit 3-4 */
-				defPix		= imgStrm.readBits(1);					/* Bit 2 */
-				hasRefine	= imgStrm.readBits(1) == 1;             /* Bit 1 */
-				isLossless	= imgStrm.readBits(1) == 1;				/* Bit 0 */
-				isStriped	= imgStrm.readBits(1) == 1;             /* Bit 15 */
-				imgStrm.readBits(15);                               /* Bit 0-14 maxStripeSize */
+			internal bool canModCombo, reqAuxBuf, hasRefine, isLossless, isStriped, defPix;
+			internal override void Init(SegmentHeader header, ImgStream sis) {
+				base.Init(header, sis);
+				width		= imgStrm.ReadInt(4);
+				height		= imgStrm.ReadInt(4);
+				imgStrm.Position += 8;
+				int flags = imgStrm.ReadByte();
+				canModCombo = (flags & 0x40) != 0;					/* Bit 6 */
+				reqAuxBuf	= (flags & 0x20) != 0;					/* Bit 5 */
+				comboOper	= (ComboOper)((flags >> 3) & 0x03);		/* Bit 3-4 */
+				defPix		= (flags & 0x04) != 0;					/* Bit 2 */
+				hasRefine	= (flags & 0x02) != 0;					/* Bit 1 */
+				isLossless	= (flags & 0x01) != 0;                  /* Bit 0 */
+				isStriped	= (imgStrm.ReadInt(2) & 0x8000) != 0;	/* Bit 15, 0-14 maxStripeSize */
 			}
-			public bool isComboOperOverrideAllow() { return comboOperOverrideAllow; }
+			internal ComboOper GetComboOper(RegSegInfo ri) {
+				return canModCombo ? ri.comboOper : comboOper;
+			}
 		}
 		internal class RegSegInfo : SegmentData {
 			internal int width, height, xLoc, yLoc;
-			/** Region segment flags, 7.4.1.5 */
-			public RegSegInfo(ImgStream subInputStream = null) {
-				imgStrm = subInputStream;
+			public RegSegInfo(ImgStream sis = null) {
+				imgStrm = sis;
 			}
-			public void parseHeader() {
-				width	= imgStrm.readInt(4);
-				height	= imgStrm.readInt(4);
-				xLoc	= imgStrm.readInt(4);
-				yLoc	= imgStrm.readInt(4);
-				imgStrm.readBits(5); // Dirty read... reserved bits are 0
-				comboOper = (ComboOper)(imgStrm.readBits(3) & 0xf);
+			public void ParseHeader() {
+				(width, height)	= (imgStrm.ReadInt(4), imgStrm.ReadInt(4));
+				(xLoc,  yLoc)	= (imgStrm.ReadInt(4), imgStrm.ReadInt(4));
+				comboOper = (ComboOper)(imgStrm.ReadByte() & 7);
 			}
 		}
 		internal class Table : SegmentData {
 			int htOOB, htPS, htRS, htLow, htHigh;         /** Code table flags, B.2.1, page 87 */
-			internal override void init(SegmentHeader header, ImgStream sis) {
-				base.init(header, sis);
-				if (imgStrm.readBits(1) == 1)               /* Bit 7 */
-					throw new ArgumentException("B.2.1 Code table flags: Bit 7 must be zero");
-				htRS	= imgStrm.readBits(3) + 1;			/* Bit 4-6 */
-				htPS	= imgStrm.readBits(3) + 1;			/* Bit 1-3 */
-				htOOB	= imgStrm.readBits(1);				/* Bit 0 */
-				htLow	= imgStrm.readInt(4);
-				htHigh	= imgStrm.readInt(4);
+			internal override void Init(SegmentHeader header, ImgStream sis) {
+				base.Init(header, sis);
+				int flags = imgStrm.ReadByte();
+				htRS	= ((flags >> 4) & 7) + 1;			/* Bit 4-6 */
+				htPS	= ((flags >> 1) & 7) + 1;			/* Bit 1-3 */
+				htOOB	= flags & 1;						/* Bit 0 */
+				htLow	= imgStrm.ReadInt(4);
+				htHigh	= imgStrm.ReadInt(4);
 			}
-			internal HuffmanTable getHuffman() {
+			internal HuffmanTable GetHuffTbl() {
 				int pref, rng;
 				var codeTable = new List<HuffmanTable.Code>();
 				for (int c = htLow; c < htHigh; c += 1 << rng) {
-					pref = imgStrm.readBits(htPS);
-					rng = imgStrm.readBits(htRS);
+					pref = imgStrm.ReadBits(htPS);
+					rng = imgStrm.ReadBits(htRS);
 					codeTable.Add(new HuffmanTable.Code(pref, rng, c, false));
 				}
-				codeTable.Add(new HuffmanTable.Code(imgStrm.readBits(htPS), 32, htLow - 1, true));
-				codeTable.Add(new HuffmanTable.Code(imgStrm.readBits(htPS), 32, htHigh, false));
+				codeTable.Add(new HuffmanTable.Code(imgStrm.ReadBits(htPS), 32, htLow - 1, true));
+				codeTable.Add(new HuffmanTable.Code(imgStrm.ReadBits(htPS), 32, htHigh, false));
 				if (htOOB == 1)                  /* Annex B.2 10) - out-of-band table line */
-					codeTable.Add(new HuffmanTable.Code(imgStrm.readBits(htPS), -1, -1, false));
+					codeTable.Add(new HuffmanTable.Code(imgStrm.ReadBits(htPS), -1, -1, false));
 				return new HuffmanTable(codeTable);
 			}
 		}
@@ -2621,20 +2535,20 @@ namespace XPdf {
 			bool isMMR;
 			int hdpWidth, hdpHeight, grayMax, hdTemplate;
 			List<JB2Bmp> patterns;
-			internal override void init(SegmentHeader header, ImgStream sis) {
-				base.init(header, sis);
-				imgStrm.readBits(5);						// Dirty read .../* Bit 3-7 */
-				hdTemplate		= imgStrm.readBits(2);     /* Bit 1-2 */
-				isMMR			= imgStrm.readBits(1) == 1; /* Bit 0 */
-				hdpWidth		= imgStrm.readSByte();
-				hdpHeight		= imgStrm.readSByte();
-				grayMax			= imgStrm.readInt(4);
-				dataOffset		= imgStrm.Position;
-				dataLength		= imgStrm.Length - dataOffset;
+			internal override void Init(SegmentHeader header, ImgStream sis) {
+				base.Init(header, sis);
+				int flags = imgStrm.ReadByte();
+				hdTemplate	= (flags >> 1) & 0x03;		/* Bit 1-2 */
+				isMMR		= (flags & 0x01) != 0;		/* Bit 0 */
+				hdpWidth	= imgStrm.ReadSByte();
+				hdpHeight	= imgStrm.ReadSByte();
+				grayMax		= imgStrm.ReadInt(4);
+				dataOffset	= imgStrm.Position;
+				dataLength	= imgStrm.Length - dataOffset;
 				if (hdpHeight < 1 || hdpWidth < 1)
 					throw new ArgumentException("Width/Heigth must be greater than zero.");
 			}
-			internal override List<JB2Bmp> getDictionary() {
+			internal override List<JB2Bmp> GetDictionary() {
 				if (null != patterns) return patterns;
 				if (!isMMR)
 					if (hdTemplate == 0) {
@@ -2646,293 +2560,256 @@ namespace XPdf {
 						gbAtY = new short[1] { 0 };
 					}
 				GenRegion genReg = new GenRegion(imgStrm);				// 2)
-				genReg.setParameters(this, isMMR, hdpHeight,
-						(grayMax + 1) * hdpWidth, hdTemplate, gbAtX, gbAtY);
-				JB2Bmp colBmp = genReg.getRegBmp();
+				genReg.SetParams(this, isMMR, hdpHeight, (grayMax+1)*hdpWidth, hdTemplate, gbAtX, gbAtY);
+				JB2Bmp colBmp = genReg.GetRegBmp();
 				patterns = new List<JB2Bmp>(grayMax + 1);               // 3)
 				for (int gray = 0; gray <= grayMax; gray++) {           // 4)
 					var roi = new Rectangle(hdpWidth * gray, 0, hdpWidth, hdpHeight);
-					patterns.Add(colBmp.extract(roi));					// 4) b)
+					patterns.Add(colBmp.Extract(roi));					// 4) b)
 				}
 				return patterns;
 			}
 		}
 		internal class SymbolDictionary : SegmentData {
 			/** Symbol dictionary flags, 7.4.2.1.1 */
-			byte	sdTemplate;
-			bool	isCodeCtxRetained, isCodeCtxUsed, useRefineAggr, isHuffman;
-			int		amtExpSymb, amtNewSymb, amtImpSymb, amtDecodedSymb, sbSymCodeLen, sdrTemplate, 
-					sdHuffAggInstSel, sdHuffBMSizeSel, sdHuffDecodeWidthSel, sdHuffDecodeHeightSel;
+			bool	isCodeCtxRetained, isCodeCtxUsed, useRefineAggr, isHuffman, sdrTemplate;
+			int		amtExpSymb, amtNewSymb, amtImpSymb, amtDecodedSymb, sbSymCodeLen, sdTemplate, 
+					sdHuffAggInstSel, sdHuffBMSizeSel, sdHuffDecWidthSel, sdHuffDecHeightSel;
 			short[] sdATX, sdATY;               /** Symbol dictionary AT flags, 7.4.2.1.2 */
 			short[] sdrATX, sdrATY;             /** Symbol dictionary refinement AT flags, 7.4.2.1.3 */
 			List<JB2Bmp>	importSymbols;
 			JB2Bmp[]		newSymbols;
 			HuffmanTable	dhTable, dwTable, bmSizeTable, aggInstTable;
 			List<JB2Bmp>	expSymbols, sbSymbols;
-			ArithmDecoder	arithmeticDecoder;
+			ArithmDecoder	arithDecoder;
 			TextRegion		txtReg;
 			GenRegion		genReg;
 			GenRefineRegion genRefineReg;
 			internal CXStats cx, cxIADH, cxIADW, cxIAAI, cxIAEX, cxIARDX, cxIARDY, cxIADT, cxIAID;
-			internal override List<JB2Bmp> getDictionary() {    // 6.5.5 Decoding the symbol dictionary
+			internal override List<JB2Bmp> GetDictionary() {    // 6.5.5 Decoding the symbol dictionary
 				if (null == expSymbols) {
 					if (useRefineAggr)
-						sbSymCodeLen = getSbSymCodeLen();
+						sbSymCodeLen = GetSbSymCodeLen();
 					if (!isHuffman) {
 						if (cxIADT == null)
 							(cxIADT, cxIADH, cxIADW, cxIAAI, cxIAEX, cx)
-								= (new CXStats(), new CXStats(), new CXStats(),
+								= ( new CXStats(), new CXStats(), new CXStats(),
 									new CXStats(), new CXStats(), new CXStats(65536));
 						if (useRefineAggr && cxIAID == null)
 							(cxIAID, cxIARDX, cxIARDY) = (new CXStats(1 << sbSymCodeLen),
 										new CXStats(), new CXStats());
-						arithmeticDecoder = arithmeticDecoder ?? new ArithmDecoder(imgStrm);
+						arithDecoder = arithDecoder ?? new ArithmDecoder(imgStrm);
 					}
-					newSymbols = new JB2Bmp[amtNewSymb];                    /* 6.5.5 1) */
-					int[] newSymbWidths = null;                         /* 6.5.5 2) */
+					newSymbols = new JB2Bmp[amtNewSymb];					/* 6.5.5 1) */
+					int[] newSymbWidths = null;								/* 6.5.5 2) */
 					if (isHuffman && !useRefineAggr)
 						newSymbWidths = new int[amtNewSymb];
-					setSymbolsArray();
-					int clsHeight = 0;                                              /* 6.5.5 3) */
-					for (amtDecodedSymb = 0; amtDecodedSymb < amtNewSymb;) {          /* 6.5.5 4 a) */
-						clsHeight += (int)(isHuffman ? decodeHeightClassDeltaHeightWithHuffman() : arithmeticDecoder.decodeInt(cxIADH));
+					SetSymbolsArray();
+					int clsHeight = 0;										/* 6.5.5 3) */
+					for (amtDecodedSymb = 0; amtDecodedSymb < amtNewSymb;) {/* 6.5.5 4 a) */
+						clsHeight += (int)(isHuffman ? DecodeHeightClassDeltaHeightWithHuffman() : arithDecoder.DecodeInt(cxIADH));
 						int symbWidth = 0, totalWidth = 0, htCls1SymbIdx = amtDecodedSymb;
-						for (; true; amtDecodedSymb++) {                             /* 6.5.5 4 c) */
-							long difWidth = decodeDifferenceWidth();                /* 4 c) i) */
+						for (; true; amtDecodedSymb++) {                    /* 6.5.5 4 c) */
+							long difWidth = DecodeDifferenceWidth();        /* 4 c) i) */
 							if (difWidth == long.MaxValue || amtDecodedSymb >= amtNewSymb)// Repeat until OOB - OOB sends a break;
 								break;
 							symbWidth += (int)difWidth;
 							totalWidth += symbWidth;
-							if (!isHuffman || useRefineAggr)                  /* 4 c) ii) */
+							if (!isHuffman || useRefineAggr)                /* 4 c) ii) */
 								if (!useRefineAggr) {
 									genReg = genReg ?? new GenRegion(imgStrm);
-									genReg.setParameters(sdTemplate,				// Parameters set according to Table 16, page 35
-										sdATX, sdATY, symbWidth, clsHeight, cx, arithmeticDecoder);
-									addSymbol(genReg);
+									genReg.SetParams(sdTemplate,		// Parameters set according to Table 16, page 35
+										sdATX, sdATY, symbWidth, clsHeight, cx, arithDecoder);
+									AddSymbol(genReg);
 								}
 								else {
-									long refAggrInst = (isHuffman) ? huffDecodeRefAggNInst() : arithmeticDecoder.decodeInt(cxIAAI);
-									if (refAggrInst > 1)							// 6.5.8.2 2)
-										decodeThroughTextRegion(symbWidth, clsHeight, refAggrInst);
-									else if (refAggrInst == 1)						// 6.5.8.2 3) refers to 6.5.8.2.2
-										decodeRefinedSymbol(symbWidth, clsHeight);
+									long refAggrInst = (isHuffman) ? HuffDecodeRefAggInst() : arithDecoder.DecodeInt(cxIAAI);
+									if (refAggrInst > 1)					// 6.5.8.2 2)
+										DecodeThroughTextRegion(symbWidth, clsHeight, refAggrInst);
+									else if (refAggrInst == 1)				// 6.5.8.2 3) refers to 6.5.8.2.2
+										DecodeRefinedSymbol(symbWidth, clsHeight);
 								}
 							else if (isHuffman && !useRefineAggr)
 								newSymbWidths[amtDecodedSymb] = symbWidth;                       /* 4 c) iii) */
 						}
 						if (isHuffman && !useRefineAggr) {					/* 6.5.5 4 d) */
-							long bmSize = (sdHuffBMSizeSel != 0) ? huffDecodeBmSize()/* 6.5.9 */
-											: HuffmanTable.getStdTbl(1).decode(imgStrm);
-							imgStrm.skipBits();
-							JB2Bmp htClsCollBmp = decodeHeightClassCollectiveBitmap(bmSize, clsHeight, totalWidth);
-							imgStrm.skipBits();
+							long bmSize = (sdHuffBMSizeSel != 0) ? HuffDecodeBmSize()/* 6.5.9 */
+											: HuffmanTable.GetStdTbl(1).Decode(imgStrm);
+							imgStrm.Seek(0, SeekOrigin.Current); // clear bitBuffer
+							JB2Bmp htClsCollBmp = DecodeHeightClsCollBmp(bmSize, clsHeight, totalWidth);
+							imgStrm.Seek(0, SeekOrigin.Current);			// clear bitBuffer
 							for (int i = htCls1SymbIdx; i < amtDecodedSymb; i++) {
 								int colStart = 0;
 								for (int j = htCls1SymbIdx; j <= i - 1; j++)
 									colStart += newSymbWidths[j];
 								Rectangle roi = new Rectangle(colStart, 0, newSymbWidths[i], clsHeight);
-								JB2Bmp symbolBitmap = htClsCollBmp.extract(roi);
-								newSymbols[i] = symbolBitmap;
-								sbSymbols.Add(symbolBitmap);
+								sbSymbols.Add(newSymbols[i] = htClsCollBmp.Extract(roi));
 							}
 						}
 					}
-					int[] exFlags = getToExportFlags();                              /* 6.5.10 1) - 5) */
-					setExportedSymbols(exFlags);                                     /* 6.5.10 6) - 8) */
+					GetToExportFlags();										/* 6.5.10 1) - 5) */
 				}
 				return expSymbols;
 			}
-			private long huffDecodeRefAggNInst() {
+			long HuffDecodeRefAggInst() {
 				if (sdHuffAggInstSel == 0)
-					return HuffmanTable.getStdTbl(1).decode(imgStrm);
-				else if (sdHuffAggInstSel == 1) {
-					if (aggInstTable == null) {
-						int ain = 0;
-						if (sdHuffDecodeHeightSel == 3) ain++;
-						if (sdHuffDecodeWidthSel == 3) ain++;
-						if (sdHuffBMSizeSel == 3) ain++;
-						aggInstTable = getUserTable(ain);
-					}
-					return aggInstTable.decode(imgStrm);
-				}
-				return 0;
+					return HuffmanTable.GetStdTbl(1).Decode(imgStrm);
+				if (sdHuffAggInstSel != 1)
+					return 0;
+				aggInstTable = aggInstTable 
+					?? segHdr.GetUserTable(sdHuffDecHeightSel, sdHuffDecWidthSel, sdHuffBMSizeSel);
+				return aggInstTable.Decode(imgStrm);
 			}
-			private void decodeThroughTextRegion(int symbolWidth, int heightClassHeight, long amountOfRefinementAggregationInstances) {
+			void DecodeThroughTextRegion(int symbWidth, int heightCls, long amtRefineAggInst) {
 				if (txtReg == null) {
 					txtReg = new TextRegion { imgStrm = imgStrm, regInfo = new RegSegInfo(imgStrm) };
-					txtReg.setContexts(cx, new CXStats(), new CXStats(), new CXStats(), new CXStats(), 
+					txtReg.SetContexts(cx, new CXStats(), new CXStats(), new CXStats(), new CXStats(), 
 								   cxIAID, new CXStats(), new CXStats(), new CXStats(), new CXStats());
 				}
-				setSymbolsArray();  // 6.5.8.2.4 Concatenating the array used as parameter later.
+				SetSymbolsArray();  // 6.5.8.2.4 Concatenating the array used as parameter later.
 									// 6.5.8.2 2) Parameters set according to Table 17, page 36
-				txtReg.setParameters(arithmeticDecoder, isHuffman, symbolWidth, heightClassHeight, 
-					amountOfRefinementAggregationInstances, amtImpSymb + amtDecodedSymb, 
-					sdrTemplate, sdrATX, sdrATY, sbSymbols, sbSymCodeLen);
-				addSymbol(txtReg);
+				txtReg.SetParams(arithDecoder, isHuffman, symbWidth, heightCls, amtRefineAggInst, 
+					amtImpSymb + amtDecodedSymb, sdrTemplate, sdrATX, sdrATY, sbSymbols, sbSymCodeLen);
+				AddSymbol(txtReg);
 			}
-			private void decodeRefinedSymbol(int symWidth, int hcHeight) {
+			void DecodeRefinedSymbol(int symWidth, int hcHeight) {
 				int id, rdx, rdy;
 				if (isHuffman) {
-					id  = imgStrm.readBits(sbSymCodeLen);
-					rdx = (int)HuffmanTable.getStdTbl(15).decode(imgStrm);
-					rdy = (int)HuffmanTable.getStdTbl(15).decode(imgStrm);
-					HuffmanTable.getStdTbl(1).decode(imgStrm);
-					imgStrm.skipBits();
+					id  = imgStrm.ReadBits(sbSymCodeLen);
+					rdx = (int)HuffmanTable.GetStdTbl(15).Decode(imgStrm);
+					rdy = (int)HuffmanTable.GetStdTbl(15).Decode(imgStrm);
+					HuffmanTable.GetStdTbl(1).Decode(imgStrm);
+					imgStrm.Seek(0, SeekOrigin.Current); // clear bitBuffer
 				}
 				else {
-					id  = (int)arithmeticDecoder.decodeIAID(sbSymCodeLen, cxIAID);
-					rdx = (int)arithmeticDecoder.decodeInt(cxIARDX);
-					rdy = (int)arithmeticDecoder.decodeInt(cxIARDY);
+					id  = (int)arithDecoder.DecodeIAID(sbSymCodeLen, cxIAID);
+					rdx = (int)arithDecoder.DecodeInt(cxIARDX);
+					rdy = (int)arithDecoder.DecodeInt(cxIARDY);
 				}
-				setSymbolsArray();                  /* 6) */
+				SetSymbolsArray();							/* 6) */
 				JB2Bmp ibo = sbSymbols[id];
 				if (genRefineReg == null) {
 					genRefineReg = new GenRefineRegion(imgStrm);
-					if (arithmeticDecoder == null)
-						(arithmeticDecoder, cx) = (new ArithmDecoder(imgStrm), new CXStats(65536));
+					if (arithDecoder == null)
+						(arithDecoder, cx) = (new ArithmDecoder(imgStrm), new CXStats(65536));
 				}
-				genRefineReg.setParameters(cx, arithmeticDecoder,        // Parameters as shown in Table 18, page 36
+				genRefineReg.SetParams(cx, arithDecoder,	// Parameters as shown in Table 18, page 36
 					sdrTemplate, symWidth, hcHeight, ibo, rdx, rdy, sdrATX, sdrATY);
-				addSymbol(genRefineReg);
-				if (isHuffman)               /* 7) */
-					imgStrm.skipBits();
+				AddSymbol(genRefineReg);
+				if (isHuffman)								/* 7) */
+					imgStrm.Seek(0, SeekOrigin.Current);	// clear bitBuffer
 			}   // Make sure that the processed bytes are equal to the value read in step 5 a)
-			private void addSymbol(Region region) {
-				sbSymbols.Add(newSymbols[amtDecodedSymb] = region.getRegBmp());
+			void AddSymbol(Region region) {
+				sbSymbols.Add(newSymbols[amtDecodedSymb] = region.GetRegBmp());
 			}
-			private long decodeDifferenceWidth() {
-				if (isHuffman)
-					switch (sdHuffDecodeWidthSel) {
-						case 0: return HuffmanTable.getStdTbl(2).decode(imgStrm);
-						case 1: return HuffmanTable.getStdTbl(3).decode(imgStrm);
-						case 3:
-							dwTable = dwTable ?? getUserTable(sdHuffDecodeHeightSel == 3 ? 1 : 0);
-							return dwTable.decode(imgStrm);
-					}
-				else
-					return arithmeticDecoder.decodeInt(cxIADW);
-				return 0;
-			}
-			private long decodeHeightClassDeltaHeightWithHuffman() {
-				switch (sdHuffDecodeHeightSel) {
-					case 0: return HuffmanTable.getStdTbl(4).decode(imgStrm);
-					case 1: return HuffmanTable.getStdTbl(5).decode(imgStrm);
-					case 3: return (dhTable = dhTable ?? getUserTable(0)).decode(imgStrm);
+			long DecodeDifferenceWidth() {
+				if (!isHuffman)
+					return arithDecoder.DecodeInt(cxIADW);
+				switch (sdHuffDecWidthSel) {
+					case 0: return HuffmanTable.GetStdTbl(2).Decode(imgStrm);
+					case 1: return HuffmanTable.GetStdTbl(3).Decode(imgStrm);
+					case 3:	dwTable = dwTable ?? segHdr.GetUserTable(sdHuffDecHeightSel);
+							return dwTable.Decode(imgStrm);
 				}
 				return 0;
 			}
-			private JB2Bmp decodeHeightClassCollectiveBitmap(long bmSize, int htCls, int totWidth) {
+			long DecodeHeightClassDeltaHeightWithHuffman() {
+				switch (sdHuffDecHeightSel) {
+					case 0: return HuffmanTable.GetStdTbl(4).Decode(imgStrm);
+					case 1: return HuffmanTable.GetStdTbl(5).Decode(imgStrm);
+					case 3: return (dhTable = dhTable ?? segHdr.GetUserTable()).Decode(imgStrm);
+				}
+				return 0;
+			}
+			JB2Bmp DecodeHeightClsCollBmp(long bmSize, int htCls, int totWidth) {
 				if (bmSize == 0) {
 					JB2Bmp ret = new JB2Bmp(totWidth, htCls);
 					for (int i = 0, len = ret.Length; i < len; i++)
-						ret.bitmap[i] = (byte)imgStrm.readSByte();
+						ret.bitmap[i] = (byte)imgStrm.ReadSByte();
 					return ret;
 				}
 				genReg = genReg ?? new GenRegion(imgStrm);
-				genReg.setParameters(imgStrm.Position, bmSize, htCls, totWidth);
-				return genReg.getRegBmp();
+				genReg.SetParams(imgStrm.Position, bmSize, htCls, totWidth);
+				return genReg.GetRegBmp();
 			}
-			private void setExportedSymbols(int[] toExportFlags) {
-				expSymbols = new List<JB2Bmp>(amtExpSymb);
-				for (int i = 0; i < amtImpSymb + amtNewSymb; i++)
-					if (toExportFlags[i] == 1)
-						expSymbols.Add(i < amtImpSymb ? importSymbols[i] : newSymbols[i - amtImpSymb]);
-			}
-			private int[] getToExportFlags() {
-				int currentExportFlag = 0;
-				long exRunLen;
-				int[] exportFlags = new int[amtImpSymb + amtNewSymb];
+			void GetToExportFlags() {
+				int		curFlag = 0;
+				long	exRunLen;
+				int[]	exportFlags = new int[amtImpSymb + amtNewSymb];
 				for (int expIdx = 0; expIdx < amtImpSymb + amtNewSymb; expIdx += (int)exRunLen) {
-					exRunLen = !isHuffman ? arithmeticDecoder.decodeInt(cxIAEX)
-									: HuffmanTable.getStdTbl(1).decode(imgStrm);
+					exRunLen = isHuffman ? HuffmanTable.GetStdTbl(1).Decode(imgStrm)
+										 : arithDecoder.DecodeInt(cxIAEX);
 					if (exRunLen != 0)
 						for (int index = expIdx; index < expIdx + exRunLen; index++)
-							exportFlags[index] = currentExportFlag;
-					currentExportFlag = (currentExportFlag == 0) ? 1 : 0;
+							exportFlags[index] = curFlag;
+					curFlag = 1 - curFlag;
 				}
-				return exportFlags;
+				expSymbols = new List<JB2Bmp>(amtExpSymb);
+				for (int i = 0; i < amtImpSymb + amtNewSymb; i++)
+					if (exportFlags[i] == 1)
+						expSymbols.Add(i < amtImpSymb ? importSymbols[i] : newSymbols[i-amtImpSymb]);
 			}
-			private long huffDecodeBmSize() {
-				if (bmSizeTable == null) {
-					int bmNr = 0;
-					if (sdHuffDecodeHeightSel == 3) bmNr++;
-					if (sdHuffDecodeWidthSel == 3) bmNr++;
-					bmSizeTable = getUserTable(bmNr);
-				}
-				return bmSizeTable.decode(imgStrm);
+			long HuffDecodeBmSize() {
+				bmSizeTable = bmSizeTable ?? segHdr.GetUserTable(sdHuffDecHeightSel, sdHuffDecWidthSel);
+				return bmSizeTable.Decode(imgStrm);
 			}
-			private int getSbSymCodeLen() {
-				var v = Math.Log(amtImpSymb + amtNewSymb) / Math.Log(2);
-				return (isHuffman) ? (int)Math.Max(1, Math.Ceiling(v))
-							: (int)Math.Ceiling(Math.Log(amtImpSymb + amtNewSymb) / Math.Log(2));
+			int GetSbSymCodeLen() {
+				var v = GetMaxBit(amtImpSymb + amtNewSymb);
+				return isHuffman ? Math.Max(1, v) : v;
 			}
-			private void setSymbolsArray() {
+			void SetSymbolsArray() {
 				if (importSymbols == null)
-					retrieveImportSymbols();
+					RetrieveImportSymbols();
 				sbSymbols = sbSymbols ?? new List<JB2Bmp>(importSymbols);
 			}
-			private void retrieveImportSymbols() {
+			void RetrieveImportSymbols() {
 				importSymbols = new List<JB2Bmp>();
-				foreach (SegmentHeader referredToSegmentHeader in segHdr.getRtSegments())
-					if (referredToSegmentHeader.segType == 0) {
-						SymbolDictionary sd = (SymbolDictionary)referredToSegmentHeader.getSegData();
-						importSymbols.AddRange(sd.getDictionary());
+				foreach (SegmentHeader rs in segHdr.rtSegments)
+					if (rs.segType == 0) {
+						SymbolDictionary sd = (SymbolDictionary)rs.GetSegData();
+						importSymbols.AddRange(sd.GetDictionary());
 						amtImpSymb += sd.amtExpSymb;
 					}
 			}
-			private HuffmanTable getUserTable(int tablePosition) {
-				int tableCounter = 0;
-				foreach (SegmentHeader referredToSegmentHeader in segHdr.getRtSegments())
-					if (referredToSegmentHeader.segType == 53) {
-						if (tableCounter == tablePosition)
-							return ((Table)referredToSegmentHeader.getSegData()).getHuffman();
-						tableCounter++;
-					}
-				return null;
-			}
-			internal override void init(SegmentHeader header, ImgStream sis) {
-				base.init(header, sis);
-				imgStrm.readBits(3); // Dirty read... reserved bits must be 0
-				sdrTemplate			= imgStrm.readBits(1);				/* Bit 12 */
-				sdTemplate			= (byte)(imgStrm.readBits(2) & 0xf);/* Bit 10-11 */
-				isCodeCtxRetained	= (imgStrm.readBits(1) == 1);		/* Bit 9 */
-				isCodeCtxUsed		= imgStrm.readBits(1) == 1;         /* Bit 8 */
-				sdHuffAggInstSel	= imgStrm.readBits(1);				/* Bit 7 */
-				sdHuffBMSizeSel		= imgStrm.readBits(1);				/* Bit 6 */
-				sdHuffDecodeWidthSel= imgStrm.readBits(2) & 0xf;		/* Bit 4-5 */
-				sdHuffDecodeHeightSel= imgStrm.readBits(2) & 0xf;		/* Bit 2-3 */
-				useRefineAggr		= imgStrm.readBits(1) == 1;			/* Bit 1 */
-				isHuffman			= imgStrm.readBits(1) == 1;         /* Bit 0 */
+			internal override void Init(SegmentHeader header, ImgStream sis) {
+				base.Init(header, sis);
+				int flags = sis.ReadInt(2);
+				sdrTemplate			= (flags & 0x1000) != 0;	/* Bit 12 */
+				sdTemplate			= (flags >> 10) & 3;		/* Bit 10-11 */
+				isCodeCtxRetained	= (flags & 0x200) != 0;		/* Bit 9 */
+				isCodeCtxUsed		= (flags & 0x100) != 0;     /* Bit 8 */
+				sdHuffAggInstSel	= (flags >> 7) & 1;			/* Bit 7 */
+				sdHuffBMSizeSel		= (flags >> 6) & 1;			/* Bit 6 */
+				sdHuffDecWidthSel	= (flags >> 4) & 3;			/* Bit 4-5 */
+				sdHuffDecHeightSel	= (flags >> 2) & 3;			/* Bit 2-3 */
+				useRefineAggr		= (flags & 0x02) != 0;		/* Bit 1 */
+				isHuffman			= (flags & 0x01) != 0;		/* Bit 0 */
 				if (!isHuffman) {
 					int noPix = sdTemplate == 0 ? 4 : 1;
 					(sdATX, sdATY) = (new short[noPix], new short[noPix]);
-					for (int i = 0; i < noPix; i++) {
-						sdATX[i] = imgStrm.readSByte();
-						sdATY[i] = imgStrm.readSByte();
-					}
+					for (int i = 0; i < noPix; i++) 
+						(sdATX[i], sdATY[i]) = (sis.ReadSByte(), sis.ReadSByte());
 				}
-				if (useRefineAggr && sdrTemplate == 0) {
+				if (useRefineAggr && !sdrTemplate) {
 					(sdrATX, sdrATY) = (new short[2], new short[2]);
-					for (int i = 0; i < 2; i++) {
-						sdrATX[i] = imgStrm.readSByte();
-						sdrATY[i] = imgStrm.readSByte();
-					}
+					(sdrATX[0], sdrATY[0]) = (sis.ReadSByte(), sis.ReadSByte());
+					(sdrATX[1], sdrATY[1]) = (sis.ReadSByte(), sis.ReadSByte());
 				}
-				amtExpSymb = imgStrm.readInt(4);
-				amtNewSymb = imgStrm.readInt(4);
-				if (segHdr.getRtSegments() != null)
-					retrieveImportSymbols();
+				amtExpSymb = sis.ReadInt(4);
+				amtNewSymb = sis.ReadInt(4);
+				if (segHdr.rtSegments != null)
+					RetrieveImportSymbols();
 				else
 					importSymbols = new List<JB2Bmp>();
 				if (isCodeCtxUsed) {
-					SegmentHeader[] rtSegments = segHdr.getRtSegments();
+					SegmentHeader[] rtSegments = segHdr.rtSegments;
 					for (int i = rtSegments.Length - 1; i >= 0; i--)
 						if (rtSegments[i].segType == 0) {
-							SymbolDictionary sd = (SymbolDictionary)rtSegments[i].getSegData();
+							SymbolDictionary sd = (SymbolDictionary)rtSegments[i].GetSegData();
 							if (sd.isCodeCtxRetained) {
-								arithmeticDecoder = sd.arithmeticDecoder;
-								isHuffman = sd.isHuffman;
-								useRefineAggr = sd.useRefineAggr;
+								arithDecoder	= sd.arithDecoder;
+								isHuffman		= sd.isHuffman;
+								useRefineAggr	= sd.useRefineAggr;
 								(sdTemplate, sdrTemplate) = (sd.sdTemplate, sd.sdrTemplate);
 								(sdATX, sdrATX) = (sd.sdATX, sd.sdrATX);
 								(sdATY, sdrATY) = (sd.sdATY, sd.sdrATY);
@@ -2947,9 +2824,9 @@ namespace XPdf {
 						isCodeCtxRetained = isCodeCtxUsed = false;
 				}
 				else
-					sdHuffBMSizeSel = sdHuffDecodeWidthSel = sdHuffDecodeHeightSel = 0;
+					sdHuffBMSizeSel = sdHuffDecWidthSel = sdHuffDecHeightSel = 0;
 				if (!useRefineAggr)
-					sdrTemplate = 0;
+					sdrTemplate = false;
 				if (!isHuffman || !useRefineAggr)
 					sdHuffAggInstSel = 0;
 			}
@@ -2957,121 +2834,110 @@ namespace XPdf {
 		internal class Region : SegmentData {
 			internal RegSegInfo regInfo;    /** Region segment information field, 7.4.1 */
 			internal JB2Bmp regBmp;        /** Decoded data as pixel values (use row stride/width to wrap line) */
-			internal virtual JB2Bmp getRegBmp() { return regBmp; }
-			internal override void init(SegmentHeader header, ImgStream sis) {
-				base.init(header, sis);
+			internal virtual JB2Bmp GetRegBmp() { return regBmp; }
+			internal override void Init(SegmentHeader header, ImgStream sis) {
+				base.Init(header, sis);
 				regInfo = new RegSegInfo(imgStrm);
-				regInfo.parseHeader();
+				regInfo.ParseHeader();
 			}
 		}
 		internal class HalftoneRegion : Region {
-			byte hDefPix, hTemplate;
-			bool hSkipEnabled, isMMR;
+			int hTemplate;
+			bool hSkipEnabled, hDefPix, isMMR;
 			int hGridWidth, hGridHeight;            /** Width of the gray-scale image, 7.4.5.1.2.1 */
 			int hGridX, hGridY;                     /** Horizontal offset of the grid, 7.4.5.1.2.3 */
 			int hRegX, hRegY;						/** Halftone grid vector, 7.4.5.1.3 */
 			JB2Bmp halftoneRegBmp;					/** Decoded data */
 			// Previously decoded data from other regions or dictionaries, stored to use as patterns in this region.
-			private List<JB2Bmp> patterns;
+			List<JB2Bmp> patterns;
 			// The procedure is described in JBIG2 ISO standard, 6.6.5.
-			internal override JB2Bmp getRegBmp() {
+			internal override JB2Bmp GetRegBmp() {
 				if (null != halftoneRegBmp)
 					return halftoneRegBmp;
-				halftoneRegBmp = new JB2Bmp(regInfo.width, regInfo.height);
+				halftoneRegBmp = new JB2Bmp(regInfo.width, regInfo.height, hDefPix);
 				if (patterns == null) {             /* 6.6.5, page 40 */
 					patterns = new List<JB2Bmp>();
-					foreach (SegmentHeader s in segHdr.getRtSegments()) 
-						patterns.AddRange((s.getSegData() as PatternDictionary).getDictionary());
+					foreach (SegmentHeader s in segHdr.rtSegments) 
+						patterns.AddRange((s.GetSegData() as PatternDictionary).GetDictionary());
 				}
-				if (hDefPix == 1)
-					halftoneRegBmp.fillBitmap(0xff);
 				// 6.6.5.1 Computing hSkip - At the moment SKIP is not used... we are not able to test it.
-				int bitsPerValue = (int)Math.Ceiling(Math.Log(patterns.Count()) / Math.Log(2)); /* 3) */
-				int[][] grayScaleValues = grayScaleDecoding(bitsPerValue);                      /* 4) */
+				int bitsPerValue = GetMaxBit(patterns.Count()); /* 3) */
+				int[][] grayScaleValues = GrayScaleDecoding(bitsPerValue);                      /* 4) */
 				// 5), rendering the pattern, described in 6.6.5.2 
-				for (int m = 0; m < hGridHeight; m++)               // 1)
-					for (int n = 0; n < hGridWidth; n++) {          // a)
-						int x = computeX(m, n) + hGridX, y = computeY(m, n) + hGridY;
-						int g = grayScaleValues[m][n];              // ii)
+				for (int m = 0; m < hGridHeight; m++)											// 1)
+					for (int n = 0; n < hGridWidth; n++) {										// a)
+						int x = ShiftAndFill(hGridX + m * hRegY + n * hRegX) + hGridX, 
+							y = ShiftAndFill(hGridY + m * hRegX - n * hRegY) + hGridY, 
+							g = grayScaleValues[m][n];              // ii)
 						patterns[g].blit(halftoneRegBmp, x, y, comboOper);
 					}
 				return halftoneRegBmp;                                                        /* 6) */
 			}
 			// Gray-scale image decoding procedure is special for halftone region decoding and is described in Annex C.5 on page 98.
-			private int[][] grayScaleDecoding(int bitsPerValue) {
+			int[][] GrayScaleDecoding(int bitsPerValue) {
 				short[] gbAtX = null, gbAtY = null;
 				if (!isMMR) {
 					short atx0 = (short)((hTemplate <= 1) ? 3 : (hTemplate >= 2 ? 2 : 0));
 					gbAtX = new short[4] { atx0, -3, 2, -2 };
 					gbAtY = new short[4] { -1, -1, -2, -2 };
 				}
-				JB2Bmp[] grayPlanes = new JB2Bmp[bitsPerValue];                // 1)
+				JB2Bmp[] greyPlanes = new JB2Bmp[bitsPerValue];                // 1)
 				GenRegion genReg = new GenRegion(imgStrm);
-				genReg.setParameters(this, isMMR, hGridHeight, hGridWidth, hTemplate, gbAtX, gbAtY);
+				genReg.SetParams(this, isMMR, hGridHeight, hGridWidth, hTemplate, gbAtX, gbAtY);
 				int j = bitsPerValue - 1;                                           // 2)
-				grayPlanes[j] = genReg.getRegBmp();
+				greyPlanes[j] = genReg.GetRegBmp();
 				for (; j > 0;) {
 					genReg.regBmp = null; ;
-					grayPlanes[--j] = genReg.getRegBmp();         // 3) a)
-					for (int byteIndex = 0, y = 0; y < grayPlanes[j].height; y++)
-						for (int x = 0; x < grayPlanes[j].width; x += 8) {
-							byte newValue = grayPlanes[j + 1].bitmap[byteIndex];
-							byte oldValue = grayPlanes[j].bitmap[byteIndex];
-							grayPlanes[j].bitmap[byteIndex++]
-								= JB2Bmp.combineBytes(oldValue, newValue, ComboOper.XOR);
+					greyPlanes[--j] = genReg.GetRegBmp();         // 3) a)
+					for (int byteIdx = 0, y = 0; y < greyPlanes[j].height; y++)
+						for (int x = 0; x < greyPlanes[j].width; x += 8) {
+							byte newVal = greyPlanes[j + 1].bitmap[byteIdx];
+							byte oldVal = greyPlanes[j].bitmap[byteIdx];
+							greyPlanes[j].bitmap[byteIdx++]
+								= JB2Bmp.CombineBytes(oldVal, newVal, ComboOper.XOR);
 						}
 				}
 				// Gray-scale decoding procedure, page 98
-				int[][] grayVals = new int[hGridHeight][];                   // 4)
+				int[][] greyVals = new int[hGridHeight][];                   // 4)
 				for (int y = 0; y < hGridHeight; y++) {
-					grayVals[y] = new int[hGridWidth];
+					greyVals[y] = new int[hGridWidth];
 					for (int x = 0; x < hGridWidth; x += 8) {
-						int minorWidth = hGridWidth - x > 8 ? 8 : hGridWidth - x;
-						int byteIndex = grayPlanes[0].getIdx(x, y);
-						for (int minorX = 0; minorX < minorWidth; minorX++) {
-							int i = minorX + x;
-							grayVals[y][i] = 0;
+						int minWidth = hGridWidth - x > 8 ? 8 : hGridWidth - x;
+						int byteIdx = greyPlanes[0].GetIdx(x, y);
+						for (int minX = 0; minX < minWidth; minX++) {
+							int i = minX + x;
+							greyVals[y][i] = 0;
 							for (j = 0; j < bitsPerValue; j++)
-								grayVals[y][i] += ((grayPlanes[j].bitmap[byteIndex] >> (7-i&7)) & 1) * (1 << j);
+								greyVals[y][i] += ((greyPlanes[j].bitmap[byteIdx] >> (7-i&7)) & 1) * (1 << j);
 						}
 					}
 				}
-				return grayVals;
+				return greyVals;
 			}
-			private int computeX(int m, int n) {
-				return shiftAndFill((hGridX + m * hRegY + n * hRegX));
+			int ShiftAndFill(int v) {
+				v >>= 8;					// shift value by 8 and let the leftmost 8 bits be 0
+				if (v >= 0) return v;
+				int i = v | (v >> 1) | (v >> 2) | (v >> 4) | (v >> 8) | (v >> 16);
+				int bp = GetMaxBit(i - (i >> 1));
+				for (i = 1; i < 31 - bp; i++) // bit flip
+					v |= 1 << (31 - i);
+				return v;
 			}
-			private int computeY(int m, int n) {
-				return shiftAndFill((hGridY + m * hRegX - n * hRegY));
-			}
-			private int shiftAndFill(int value) {
-				value >>= 8;            // shift value by 8 and let the leftmost 8 bits be 0
-				if (value < 0) {        // fill the leftmost 8 bits with 1
-					int bitPosition = (int)(Math.Log(highestOneBit(value)) / Math.Log(2));
-					for (int i = 1; i < 31 - bitPosition; i++) // bit flip
-						value |= 1 << (31 - i);
-				}
-				return value;
-				int highestOneBit(int i) {
-					i |= (i >> 1) | (i >> 2) | (i >> 4) | (i >> 8) | (i >> 16);
-					return i - (i >> 1);
-				}
-			}
-			internal override void init(SegmentHeader header, ImgStream sis) {
-				base.init(header, sis);
-				hDefPix	= (byte)imgStrm.readBits(1);				/* Bit 7 */
-				comboOper		= (ComboOper)(imgStrm.readBits(3) & 0xf);	/* Bit 4-6 */
-				hSkipEnabled	= imgStrm.readBits(1) == 1;                 /* Bit 3 */
-				hTemplate		= (byte)(imgStrm.readBits(2) & 0xf);		/* Bit 1-2 */
-				isMMR			= imgStrm.readBits(1) == 1;                 /* Bit 0 */
-				hGridWidth		= imgStrm.readInt(4);
-				hGridHeight		= imgStrm.readInt(4);
-				hGridX			= imgStrm.readInt(4);
-				hGridY			= imgStrm.readInt(4);
-				hRegX			= imgStrm.readInt(2);
-				hRegY			= imgStrm.readInt(2);
-				dataOffset		= imgStrm.Position;
-				dataLength		= imgStrm.Length - dataOffset;
+			internal override void Init(SegmentHeader header, ImgStream sis) {
+				base.Init(header, sis);
+				int flags = imgStrm.ReadByte();
+				hDefPix			= (flags & 0x80) != 0;					/* Bit 7 */
+				comboOper		= (ComboOper)((flags >> 5) & 3);		/* Bit 4-6 */
+				hSkipEnabled	= (flags & 0x08) != 0;					/* Bit 3 */
+				hTemplate		= (flags >> 1) & 3;						/* Bit 1-2 */
+				isMMR			= (flags & 0x01) != 0;					/* Bit 0 */
+				hGridWidth		= imgStrm.ReadInt(4);
+				hGridHeight		= imgStrm.ReadInt(4);
+				hGridX			= imgStrm.ReadInt(4);
+				hGridY			= imgStrm.ReadInt(4);
+				hRegX			= imgStrm.ReadInt(2);
+				hRegY			= imgStrm.ReadInt(2);
+				dataLength		= imgStrm.Length - (dataOffset = imgStrm.Position);
 			}
 		}
 		internal class GenRefineRegion : Region {
@@ -3086,66 +2952,60 @@ namespace XPdf {
 					return ((c1 & 0x02) << 8) | (c2 << 6) | ((c3 & 0x03) << 4) | (c4 << 1) | c5;
 				}
 			}
-			static Template0 T0 = new Template0 { cxIdx = 0x100 };
-			static Template1 T1 = new Template1 { cxIdx = 0x080 };
+			static readonly Template0 T0 = new Template0 { cxIdx = 0x100 };
+			static readonly Template1 T1 = new Template1 { cxIdx = 0x080 };
 			/** Generic refinement region segment flags, 7.4.7.2 */
-			bool isTPGROn, fOverride;
-			int refDX, refDY, templateID;
-			//private Template0	template;
-			short[] grAtX, grAtY;   /** Generic refinement region segment AT flags, 7.4.7.3 */
-			JB2Bmp	refBmp;			/** Decoded data as pixel values (use row stride/width to wrap line) */
-			bool[]	grAtOverride;
-			ArithmDecoder arithDecoder;
+			bool			isTPGROn, fOverride, templateID;
+			int				refDX, refDY;
+			short[]			grAtX, grAtY;   
+			bool[]			grAtOverride;
+			JB2Bmp			refBmp;         
+			ArithmDecoder	arithDecoder;
 			CXStats cx;
 			public GenRefineRegion() { }
 			public GenRefineRegion(ImgStream subInputStream = null) {
 				imgStrm = subInputStream;
 				regInfo = new RegSegInfo(subInputStream);
 			}
-			internal override JB2Bmp getRegBmp() {
+			internal override JB2Bmp GetRegBmp() {
 				if (null != regBmp) return regBmp;
 				int isLineTypicalPredicted = 0;     /* 6.3.5.6 - 1) */
-				refBmp = refBmp ?? getGrReference();
+				refBmp = refBmp ?? ((Region)segHdr.rtSegments[0].GetSegData()).GetRegBmp();
 				arithDecoder = arithDecoder ?? new ArithmDecoder(imgStrm);
 				cx = cx ?? new CXStats(8192);
 				regBmp = new JB2Bmp(regInfo.width, regInfo.height); /* 6.3.5.6 - 2) */
-				if (templateID == 0)                    // AT pixel may only occur in template 0
-					updateOverride();
+				if (!templateID)                    // AT pixel may only occur in template 0
+					UpdateOverride();
 				int padWidth = (regBmp.width + 7) & -8;
 				int dxStride = isTPGROn ? -refDY * refBmp.stride : 0;
-				Template0 template = templateID == 0 ? T0 : T1;
+				Template0 template = templateID ? T1 : T0;
 				for (int y = 0; y < regBmp.height; y++) {   /* 6.3.5.6 - 3 */
 					if (isTPGROn)                                       /* 6.3.5.6 - 3 b) */
-						isLineTypicalPredicted ^= arithDecoder.decodeBit(template.cxIdx, cx);
+						isLineTypicalPredicted ^= arithDecoder.DecodeBit(template.cxIdx, cx);
 					if (isLineTypicalPredicted == 0)                    /* 6.3.5.6 - 3 c) */
-						decodeOptimized(y, regBmp.width, regBmp.stride, refBmp.stride);
+						DecodeOptimized(y, regBmp.width, regBmp.stride, refBmp.stride);
 					else                                                /* 6.3.5.6 - 3 d) */
-						decodeTypicalPredictedLine(y, regBmp.width, regBmp.stride, refBmp.stride, padWidth, dxStride);
+						DecodeTypicalPredictedLine(y, regBmp.width, regBmp.stride, refBmp.stride, padWidth, dxStride);
 				}
 				return regBmp;                                      /* 6.3.5.6 - 4) */
 			}
-			private JB2Bmp getGrReference() {
-				SegmentHeader[] segments = segHdr.getRtSegments();
-				Region region = (Region)segments[0].getSegData();
-				return region.getRegBmp();
-			}
-			private void decodeOptimized(int lnNum, int width, int stride, int refStride) {
+			void DecodeOptimized(int lnNum, int width, int stride, int refStride) {
 				// Offset of the reference bitmap with respect to the bitmap being decoded
 				// For example: if referenceDY = -1, y is 1 HIGHER that currY
 				int curLine = lnNum - refDY;
-				int refByteIdx = refBmp.getIdx(Math.Max(0, -refDX), curLine);
-				int byteIdx = regBmp.getIdx(Math.Max(0, refDX), lnNum);
-				Template0 template = templateID == 0 ? T0 : T1;
+				int refByteIdx = refBmp.GetIdx(Math.Max(0, -refDX), curLine);
+				int byteIdx = regBmp.GetIdx(Math.Max(0, refDX), lnNum);
+				Template0 template = templateID ? T1 : T0;
 				int c1, c2, c3, c4, c5, w1 = 0, w2 = 0, w3 = 0, w4 = 0;
 				if (curLine >= 1 && (curLine - 1) < refBmp.height)
-					w1 = refBmp.getInt(refByteIdx - refStride);
+					w1 = refBmp.GetInt(refByteIdx - refStride);
 				if (curLine >= 0 && curLine < refBmp.height)
-					w2 = refBmp.getInt(refByteIdx);
+					w2 = refBmp.GetInt(refByteIdx);
 				if (curLine >= -1 && curLine + 1 < refBmp.height)
-					w3 = refBmp.getInt(refByteIdx + refStride);
+					w3 = refBmp.GetInt(refByteIdx + refStride);
 				refByteIdx++;
 				if (lnNum >= 1)
-					w4 = regBmp.getInt(byteIdx - stride);
+					w4 = regBmp.GetInt(byteIdx - stride);
 				byteIdx++;
 				int modReferenceDX = refDX % 8, shiftOffset = 6 + modReferenceDX,
 					modRefByteIdx = refByteIdx % refStride;
@@ -3155,21 +3015,21 @@ namespace XPdf {
 					c3 = (shiftOffset >= 8 ? 0 : (int)((uint)w3 >> shiftOffset)) & 0x07;
 					if (shiftOffset == 6 && modRefByteIdx > 1) {
 						if (curLine >= 1 && (curLine - 1) < refBmp.height)
-							c1 |= refBmp.getInt(refByteIdx - refStride - 2) << 2 & 0x04;
+							c1 |= refBmp.GetInt(refByteIdx - refStride - 2) << 2 & 0x04;
 						if (curLine >= 0 && curLine < refBmp.height)
-							c2 |= refBmp.getInt(refByteIdx - 2) << 2 & 0x04;
+							c2 |= refBmp.GetInt(refByteIdx - 2) << 2 & 0x04;
 						if (curLine >= -1 && curLine + 1 < refBmp.height)
-							c3 |= refBmp.getInt(refByteIdx + refStride - 2) << 2 & 0x04;
+							c3 |= refBmp.GetInt(refByteIdx + refStride - 2) << 2 & 0x04;
 					}
 					if (shiftOffset == 0) {
 						w1 = w2 = w3 = 0;
 						if (modRefByteIdx < refStride - 1) {
 							if (curLine >= 1 && (curLine - 1) < refBmp.height)
-								w1 = refBmp.getInt(refByteIdx - refStride);
+								w1 = refBmp.GetInt(refByteIdx - refStride);
 							if (curLine >= 0 && curLine < refBmp.height)
-								w2 = refBmp.getInt(refByteIdx);
+								w2 = refBmp.GetInt(refByteIdx);
 							if (curLine >= -1 && curLine + 1 < refBmp.height)
-								w3 = refBmp.getInt(refByteIdx + refStride);
+								w3 = refBmp.GetInt(refByteIdx + refStride);
 						}
 						refByteIdx++;
 					}
@@ -3181,11 +3041,11 @@ namespace XPdf {
 					w1 = w2 = w3 = 0;
 					if (modRefByteIdx < refStride - 1) {
 						if (curLine >= 1 && (curLine - 1) < refBmp.height)
-							w1 = refBmp.getInt(refByteIdx - refStride);
+							w1 = refBmp.GetInt(refByteIdx - refStride);
 						if (curLine >= 0 && curLine < refBmp.height)
-							w2 = refBmp.getInt(refByteIdx);
+							w2 = refBmp.GetInt(refByteIdx);
 						if (curLine >= -1 && curLine + 1 < refBmp.height)
-							w3 = refBmp.getInt(refByteIdx + refStride);
+							w3 = refBmp.GetInt(refByteIdx + refStride);
 						refByteIdx++;
 					}
 					c1 |= (int)((uint)w1 >> 7) & 0x07;
@@ -3202,9 +3062,9 @@ namespace XPdf {
 				for (int x = 0; x < width; x++) {
 					int minX = x & 0x07;
 					int tval = template.form(c1, c2, c3, c4, c5);
-					int bit = arithDecoder.decodeBit(!fOverride ? tval
-						: overrideAtTemplate0(tval, x, lnNum, regBmp.bitmap[regBmp.getIdx(x,lnNum)], minX), cx);
-					regBmp.setPixel(x, lnNum, (byte)bit);
+					int bit = arithDecoder.DecodeBit(!fOverride ? tval
+						: OverrideAtTemplate0(tval, x, lnNum, regBmp.bitmap[regBmp.GetIdx(x,lnNum)], minX), cx);
+					regBmp.SetPixel(x, lnNum, (byte)bit);
 					c1 = ((c1 << 1) | 0x01 & (int)((uint)w1 >> 7)) & 0x07;
 					c2 = ((c2 << 1) | 0x01 & (int)((uint)w2 >> 7)) & 0x07;
 					c3 = ((c3 << 1) | 0x01 & (int)((uint)w3 >> 7)) & 0x07;
@@ -3215,11 +3075,11 @@ namespace XPdf {
 							w1 = w2 = w3 = 0;
 						else {
 							w1 = (curLine >= 1 && (curLine - 1 < refBmp.height))
-								? refBmp.getInt(refByteIdx - refStride) : 0;
+								? refBmp.GetInt(refByteIdx - refStride) : 0;
 							w2 = (curLine >= 0 && curLine < refBmp.height)
-								? refBmp.getInt(refByteIdx) : 0;
+								? refBmp.GetInt(refByteIdx) : 0;
 							w3 = (curLine >= -1 && (curLine + 1) < refBmp.height)
-								? refBmp.getInt(refByteIdx + refStride) : 0;
+								? refBmp.GetInt(refByteIdx + refStride) : 0;
 						}
 						refByteIdx++;
 					}
@@ -3229,408 +3089,330 @@ namespace XPdf {
 						w3 <<= 1;
 					}
 					if (minX == 5 && lnNum >= 1) {
-						w4 = ((x >> 3) + 1 >= regBmp.stride) ? 0 : regBmp.getInt(byteIdx - stride);
+						w4 = ((x >> 3) + 1 >= regBmp.stride) ? 0 : regBmp.GetInt(byteIdx - stride);
 						byteIdx++;
 					}
 					else
 						w4 <<= 1;
 				}
 			}
-			private void updateOverride() {
+			void UpdateOverride() {
 				if (grAtX == null || grAtY == null || grAtX.Length != grAtY.Length)
 					return;
 				grAtOverride = new bool[grAtX.Length];
-				if (templateID == 0) {
+				if (templateID)
+					fOverride = false;
+				else {
 					if (grAtX[0] != -1 && grAtY[0] != -1)
 						grAtOverride[0] = fOverride = true;
 					if (grAtX[1] != -1 && grAtY[1] != -1)
 						grAtOverride[1] = fOverride = true;
 				}
-				else
-					fOverride = false;
 			}
-			private void decodeTypicalPredictedLine(int lnNum, int width,
+			void DecodeTypicalPredictedLine(int lnNum, int width,
 					int stride, int refStride, int pad, int dltRefStride) {
 				int curLn = lnNum - refDY;                  // Offset of the reference bitmap with respect 
-				int refByteIdx = refBmp.getIdx(0, curLn);   // to the bitmap being decoded. For example: 
-				int byteIdx = regBmp.getIdx(0, lnNum);      // if grReferenceDY = -1, y is 1 HIGHER that currY
-				if (templateID == 0)
-					decodeTypicalPredictedLineTemplate0(lnNum, width, stride, refStride,
-								pad, dltRefStride, byteIdx, curLn, refByteIdx);
+				int refByteIdx = refBmp.GetIdx(0, curLn);   // to the bitmap being decoded. For example: 
+				int byteIdx = regBmp.GetIdx(0, lnNum);      // if grReferenceDY = -1, y is 1 HIGHER that currY
+				if (templateID)
+					DecodeTypicalPredictedLineTemplate1(lnNum, width, stride, refStride,
+									pad, dltRefStride, byteIdx, curLn, refByteIdx);
 				else
-					decodeTypicalPredictedLineTemplate1(lnNum, width, stride, refStride,
-								pad, dltRefStride, byteIdx, curLn, refByteIdx);
+					DecodeTypicalPredictedLineTemplate0(lnNum, width, stride, refStride,
+									pad, dltRefStride, byteIdx, curLn, refByteIdx);
 			}
-			private void decodeTypicalPredictedLineTemplate0(int lnNum, int width, int rowStride, 
-					int refRowStride, int padWidth, int deltaRefStride, int byteIdx, int lnCur, int refByteIdx) {
-				int prevLn = (lnNum > 0) ? regBmp.getInt(byteIdx - rowStride) : 0;
-				int prevRefLn = (lnCur > 0 && lnCur <= refBmp.height)
-					? refBmp.getInt(refByteIdx - refRowStride + deltaRefStride) << 4 : 0;
+			void DecodeTypicalPredictedLineTemplate0(int lnNum, int width, int stride, 
+					int refStride, int pad, int dltRefStride, int byteIdx, int lnCur, int refByteIdx) {
+				int prevLn = (lnNum > 0) ? regBmp.GetInt(byteIdx - stride) : 0;
+				int prvRefLn = (lnCur > 0 && lnCur <= refBmp.height)
+					? refBmp.GetInt(refByteIdx - refStride + dltRefStride) << 4 : 0;
 				int curRefLn = (lnCur >= 0 && lnCur < refBmp.height)
-					? refBmp.getInt(refByteIdx + deltaRefStride) << 1 : 0;
+					? refBmp.GetInt(refByteIdx + dltRefStride) << 1 : 0;
 				int nxtRefLn = (lnCur > -2 && lnCur < (refBmp.height - 1))
-					? refBmp.getInt(refByteIdx + refRowStride + deltaRefStride) : 0;
+					? refBmp.GetInt(refByteIdx + refStride + dltRefStride) : 0;
 				int ctx = ((prevLn >> 5) & 0x6) | ((nxtRefLn >> 2) & 0x30)
-						| (curRefLn & 0x180) | (prevRefLn & 0xc00);
+						| (curRefLn & 0x180) | (prvRefLn & 0xc00);
 				int cxCtx, nextByte;
-				for (int x = 0; x < padWidth; x = nextByte, refByteIdx++) {
+				for (int x = 0; x < pad; x = nextByte, refByteIdx++) {
 					nextByte = x + 8;
-					int res = 0, minorWidth = width - x > 8 ? 8 : width - x;
-					bool readNextByte = nextByte < width;
-					bool refReadNextByte = nextByte < refBmp.width;
-					int yOffset = deltaRefStride + 1;
+					int res = 0, minWidth = width - x > 8 ? 8 : width - x, 
+						yOff = dltRefStride + 1;
+					bool readNextByte = nextByte < width, refReadNextByte = nextByte < refBmp.width;
 					if (lnNum > 0)
 						prevLn = (prevLn << 8)
-							| (readNextByte ? regBmp.getInt(byteIdx - rowStride + 1) : 0);
+							| (readNextByte ? regBmp.GetInt(byteIdx - stride + 1) : 0);
 					if (lnCur > 0 && lnCur <= refBmp.height)
-						prevRefLn = (prevRefLn << 8)
-							| (refReadNextByte ? refBmp.getInt(refByteIdx - refRowStride + yOffset) << 4 : 0);
+						prvRefLn = (prvRefLn << 8)
+							| (refReadNextByte ? refBmp.GetInt(refByteIdx - refStride + yOff) << 4 : 0);
 					if (lnCur >= 0 && lnCur < refBmp.height)
 						curRefLn = (curRefLn << 8)
-							| (refReadNextByte ? refBmp.getInt(refByteIdx + yOffset) << 1 : 0);
+							| (refReadNextByte ? refBmp.GetInt(refByteIdx + yOff) << 1 : 0);
 					if (lnCur > -2 && lnCur < (refBmp.height - 1))
 						nxtRefLn = (nxtRefLn << 8)
-							| (refReadNextByte ? refBmp.getInt(refByteIdx + refRowStride + yOffset) : 0);
-					for (int minX = 0; minX < minorWidth; minX++) {
-						bool isPixelTypicalPredicted = false;
-						int bit = 0, bmpVal = (ctx >> 4) & 0x1FF;               // i)
-						if (bmpVal == 0x1ff) {
-							isPixelTypicalPredicted = true;
-							bit = 1;
+							| (refReadNextByte ? refBmp.GetInt(refByteIdx + refStride + yOff) : 0);
+					for (int minX = 0; minX < minWidth; minX++) {
+						int bmpVal = (ctx >> 4) & 0x1FF, toShift = 7 - minX,
+							bit = (bmpVal == 0x1ff) ? 1 : 0;
+						if (bmpVal != 0x1ff && bmpVal != 0x00) {
+							cxCtx = !fOverride ? ctx : OverrideAtTemplate0(ctx, x + minX, lnNum, res, minX);
+							bit = arithDecoder.DecodeBit(cxCtx, cx);
 						}
-						else if (bmpVal == 0x00) {
-							isPixelTypicalPredicted = true;
-							bit = 0;
-						}
-						if (!isPixelTypicalPredicted) {
-							cxCtx = !fOverride ? ctx : overrideAtTemplate0(ctx, x + minX, lnNum, res, minX);
-							bit = arithDecoder.decodeBit(cxCtx, cx);
-						}
-						int toShift = 7 - minX;
 						res |= bit << toShift;
 						ctx = ((ctx & 0xdb6) << 1) | bit | ((prevLn >> toShift + 5) & 0x002)
 								| ((nxtRefLn >> toShift + 2) & 0x010)
 								| ((curRefLn >> toShift) & 0x080)
-								| ((prevRefLn >> toShift) & 0x400);
+								| ((prvRefLn >> toShift) & 0x400);
 					}
 					regBmp.bitmap[byteIdx++] = (byte)res;
 				}
 			}
-			private void decodeTypicalPredictedLineTemplate1(int lnNum, int width, int stride,
-					int refStride, int pad, int dltRefStride, int byteIdx, int curLine, int refByteIdx) {
-				int nextByte, prevLn = (lnNum > 0)
-					? regBmp.getInt(byteIdx - stride) : 0;
-				int prevRefLn = (curLine > 0 && curLine <= refBmp.height)
-					? refBmp.getInt(byteIdx - refStride + dltRefStride) << 2 : 0;
-				int curRefLn = (curLine >= 0 && curLine < refBmp.height)
-					? refBmp.getInt(byteIdx + dltRefStride) : 0;
-				int nxtRefLn = (curLine > -2 && curLine < (refBmp.height - 1))
-					? refBmp.getInt(byteIdx + refStride + dltRefStride) : 0;
+			void DecodeTypicalPredictedLineTemplate1(int lnNum, int width, int stride,
+					int refStride, int pad, int dltRefStride, int byteIdx, int lnCur, int refByteIdx) {
+				int nextByte, prevLn = (lnNum > 0) ? regBmp.GetInt(byteIdx - stride) : 0;
+				int prvRefLn = (lnCur > 0 && lnCur <= refBmp.height)
+					? refBmp.GetInt(byteIdx - refStride + dltRefStride) << 2 : 0;
+				int curRefLn = (lnCur >= 0 && lnCur < refBmp.height)
+					? refBmp.GetInt(byteIdx + dltRefStride) : 0;
+				int nxtRefLn = (lnCur > -2 && lnCur < (refBmp.height - 1))
+					? refBmp.GetInt(byteIdx + refStride + dltRefStride) : 0;
 				int ctx = ((prevLn >> 5) & 0x6) | ((nxtRefLn >> 2) & 0x30)
-							| (curRefLn & 0xc0) | (prevRefLn & 0x200);
+							| (curRefLn & 0xc0) | (prvRefLn & 0x200);
 				int grRefVal = ((nxtRefLn >> 2) & 0x70) | (curRefLn & 0xc0)
-								| (prevRefLn & 0x700);
+								| (prvRefLn & 0x700);
 				for (int x = 0; x < pad; x = nextByte, refByteIdx++) {
 					nextByte = x + 8;
-					int result = 0, minWidth = width - x > 8 ? 8 : width - x, yOff = dltRefStride + 1;
+					int res = 0, minWidth = width - x > 8 ? 8 : width - x, yOff = dltRefStride + 1;
 					bool readNextByte = nextByte < width, refReadNextByte = nextByte < refBmp.width;
 					if (lnNum > 0)
 						prevLn = (prevLn << 8)
-							| (readNextByte ? regBmp.getInt(byteIdx - stride + 1) : 0);
-					if (curLine > 0 && curLine <= refBmp.height)
-						prevRefLn = (prevRefLn << 8)
-							| (refReadNextByte ? refBmp.getInt(refByteIdx - refStride + yOff) << 2 : 0);
-					if (curLine >= 0 && curLine < refBmp.height)
+							| (readNextByte ? regBmp.GetInt(byteIdx - stride + 1) : 0);
+					if (lnCur > 0 && lnCur <= refBmp.height)
+						prvRefLn = (prvRefLn << 8)
+							| (refReadNextByte ? refBmp.GetInt(refByteIdx - refStride + yOff) << 2 : 0);
+					if (lnCur >= 0 && lnCur < refBmp.height)
 						curRefLn = (curRefLn << 8)
-							| (refReadNextByte ? refBmp.getInt(refByteIdx + yOff) : 0);
-					if (curLine > -2 && curLine < (refBmp.height - 1))
+							| (refReadNextByte ? refBmp.GetInt(refByteIdx + yOff) : 0);
+					if (lnCur > -2 && lnCur < (refBmp.height - 1))
 						nxtRefLn = (nxtRefLn << 8)
-							| (refReadNextByte ? refBmp.getInt(refByteIdx + refStride + yOff) : 0);
+							| (refReadNextByte ? refBmp.GetInt(refByteIdx + refStride + yOff) : 0);
 					for (int minorX = 0; minorX < minWidth; minorX++) {
 						int bmpVal = (grRefVal >> 4) & 0x1ff;       // i)
 						int bit = (bmpVal == 0x1ff) ? 1
-							: (bmpVal == 0x00 ? 0 : arithDecoder.decodeBit(ctx, cx));
+							: (bmpVal == 0x00 ? 0 : arithDecoder.DecodeBit(ctx, cx));
 						int toShift = 7 - minorX;
-						result |= bit << toShift;
+						res |= bit << toShift;
 						ctx = ((ctx & 0x0d6) << 1) | bit | ((prevLn >> toShift + 5) & 0x002)
 								| ((nxtRefLn >> toShift + 2) & 0x010) | ((curRefLn >> toShift) & 0x040)
-								| ((prevRefLn >> toShift) & 0x200);
+								| ((prvRefLn >> toShift) & 0x200);
 						grRefVal = ((grRefVal & 0x0db) << 1) | ((nxtRefLn >> toShift + 2) & 0x010)
-								| ((curRefLn >> toShift) & 0x080) | ((prevRefLn >> toShift) & 0x400);
+								| ((curRefLn >> toShift) & 0x080) | ((prvRefLn >> toShift) & 0x400);
 					}
-					regBmp.bitmap[byteIdx++] = (byte)result;
+					regBmp.bitmap[byteIdx++] = (byte)res;
 				}
 			}
-			private int overrideAtTemplate0(int ctx, int x, int y, int result, int minX) {
+			int OverrideAtTemplate0(int ctx, int x, int y, int result, int minX) {
 				if (grAtOverride[0])
 					ctx = (ctx & 0xfff7) | (grAtY[0] == 0 && grAtX[0] >= -minX
 							? (result >> (7 - (minX + grAtX[0])) & 0x1) << 3
-							: getPixel(regBmp, x + grAtX[0], y + grAtY[0]) << 3);
+							: regBmp.GetPixel(x + grAtX[0], y + grAtY[0]) << 3);
 				if (grAtOverride[1])
 					ctx = (ctx & 0xefff) | (grAtY[1] == 0 && grAtX[1] >= -minX
 						? (result >> (7 - (minX + grAtX[1])) & 0x1) << 12
-						: getPixel(refBmp, x + grAtX[1] + refDX, y + grAtY[1] + refDY) << 12);
+						: refBmp.GetPixel(x + grAtX[1] + refDX, y + grAtY[1] + refDY) << 12);
 				return ctx;
 			}
-			private byte getPixel(JB2Bmp b, int x, int y) {
-				if (x < 0 || x >= b.width) return 0;
-				if (y < 0 || y >= b.height) return 0;
-				return b.getPixel(x, y);
-			}
-			internal override void init(SegmentHeader header, ImgStream sis) {
-				base.init(header, sis);
-				imgStrm.readBits(6);                        // Dirty read...
-				isTPGROn = imgStrm.readBits(1) == 1;        /* Bit 1 */
-				templateID = imgStrm.readBits(1);			/* Bit 0 */
-				if (templateID == 0) {
+			internal override void Init(SegmentHeader header, ImgStream sis) {
+				base.Init(header, sis);
+				int flags = imgStrm.ReadByte();
+				isTPGROn = (flags & 2) != 0;				/* Bit 1 */
+				templateID = (flags & 1) != 0;				/* Bit 0 */
+				if (!templateID) {
 					(grAtX, grAtY) = (new short[2], new short[2]);
-					grAtX[0] = imgStrm.readSByte();         /* Byte 0 */
-					grAtY[0] = imgStrm.readSByte();         /* Byte 1 */
-					grAtX[1] = imgStrm.readSByte();         /* Byte 2 */
-					grAtY[1] = imgStrm.readSByte();         /* Byte 3 */
+					(grAtX[0], grAtY[0]) = (imgStrm.ReadSByte(), imgStrm.ReadSByte());
+					(grAtX[1], grAtY[1]) = (imgStrm.ReadSByte(), imgStrm.ReadSByte());
 				}
 			}
-			internal void setParameters(CXStats cx, ArithmDecoder arithmeticDecoder, 
-					int grTemplate, int regionWidth, int regionHeight, JB2Bmp grReference, int grReferenceDX,
-					int grReferenceDY, short[] grAtX, short[] grAtY) {
+			internal void SetParams(CXStats cx, ArithmDecoder arithDecoder, 
+					bool templt, int regWidth, int regHeight, JB2Bmp grRef, 
+					int refDX, int refDY, short[] grAtX, short[] grAtY) {
 				this.cx = cx ?? this.cx;
-				arithDecoder = arithmeticDecoder ?? arithDecoder;
-				(templateID, refBmp, regBmp, isTPGROn) = (grTemplate, grReference, null, false);
-				(this.refDX, this.grAtX) = (grReferenceDX, grAtX);
-				(this.refDY, this.grAtY) = (grReferenceDY, grAtY);
-				(regInfo.width, regInfo.height) = (regionWidth, regionHeight);
+				this.arithDecoder = arithDecoder ?? this.arithDecoder;
+				(templateID, refBmp, regBmp, isTPGROn) = (templt, grRef, null, false);
+				(this.refDX, this.grAtX) = (refDX, grAtX);
+				(this.refDY, this.grAtY) = (refDY, grAtY);
+				(regInfo.width, regInfo.height) = (regWidth, regHeight);
 			}
 		}
 		internal class TextRegion : Region {
-			int sbrTemplate, sbdsOffset, defPix, isTransposed, refCorner, logSBStrips, sbStrips, amtOfSymb;
-			bool useRefinement, isHuffman;
-			int sbHuffRSize, sbHuffRDY, sbHuffRDX,		/** Text region segment Huffman flags, 7.4.3.1.2 */
-					sbHuffRDHeight, sbHuffRDWidth, sbHuffDT, sbHuffDS, sbHuffFS;
-			short[] sbrATX, sbrATY;                     /** Text region refinement AT flags, 7.4.3.1.3 */
-			/** Number of symbol instances, 7.4.3.1.4 */
-			long amtOfSymbInst, currentS;               /** Further parameters */
-			List<JB2Bmp> symbols = new List<JB2Bmp>();
-			ArithmDecoder arithmeticDecoder;
+			bool			useRefinement, isHuffman, sbrTemplate, defPix;
+			int				sbdsOffset, isTransposed, refCorner, logSBStrips, sbStrips, 
+							amtOfSymb, symbCodeLen, sbHuffRSize, sbHuffRDY, sbHuffRDX, 
+							sbHuffRDHeight, sbHuffRDWidth, sbHuffDT, sbHuffDS, sbHuffFS;
+			short[]			sbrATX, sbrATY;             /** Text region refinement AT flags, 7.4.3.1.3 */
+			long			amtOfSymbInst, currentS;    /** Further parameters */
+			List<JB2Bmp>	symbols = new List<JB2Bmp>();
+			ArithmDecoder	arithDecoder;
 			GenRefineRegion genRefineReg;
-			CXStats cxIADT, cxIAFS, cxIADS, cxIAIT, cxIARI, cxIARDW, cxIARDH, cxIAID, cxIARDX, cxIARDY, cx;
-			int symbolCodeLength;                       /** codeTable including a code to each symbol used in that region */
-			HuffmanTable symbolCodeTable;
-			/** User-supplied tables * */
-			HuffmanTable fsTable, dsTable, table, rdwTable, rdhTable, rdxTable, rdyTable, rSizeTable;
-			internal override JB2Bmp getRegBmp() {
+			CXStats			cxIADT, cxIAFS, cxIADS, cxIAIT, cxIARI, cxIARDW, 
+							cxIARDH, cxIAID, cxIARDX, cxIARDY, cx;
+			HuffmanTable	symbCodeTbl, fsTable, dsTable, table, rdwTable, 
+							rdhTable, rdxTable, rdyTable, rSizeTable;
+			internal override JB2Bmp GetRegBmp() {
 				if (!isHuffman) {
-					cxIADT = cxIADT ?? new CXStats();
-					cxIAFS = cxIAFS ?? new CXStats();
-					cxIADS = cxIADS ?? new CXStats();
-					cxIAIT = cxIAIT ?? new CXStats();
-					cxIARI = cxIARI ?? new CXStats();
-					cxIARDW = cxIARDW ?? new CXStats();
-					cxIARDH = cxIARDH ?? new CXStats();
-					cxIAID = cxIAID ?? new CXStats(1 << symbolCodeLength);
-					cxIARDX = cxIARDX ?? new CXStats();
-					cxIARDY = cxIARDY ?? new CXStats();
-					arithmeticDecoder = arithmeticDecoder ?? new ArithmDecoder(imgStrm);
+					cxIADT	= cxIADT	?? new CXStats();
+					cxIAFS	= cxIAFS	?? new CXStats();
+					cxIADS	= cxIADS	?? new CXStats();
+					cxIAIT	= cxIAIT	?? new CXStats();
+					cxIARI	= cxIARI	?? new CXStats();
+					cxIARDW = cxIARDW	?? new CXStats();
+					cxIARDH = cxIARDH	?? new CXStats();
+					cxIAID	= cxIAID	?? new CXStats(1 << symbCodeLen);
+					cxIARDX	= cxIARDX	?? new CXStats();
+					cxIARDY	= cxIARDY	?? new CXStats();
+					arithDecoder = arithDecoder ?? new ArithmDecoder(imgStrm);
 				}
-				regBmp = new JB2Bmp(regInfo.width, regInfo.height);
-				if (defPix != 0)                  /* 1) */
-					regBmp.fillBitmap(0xff);
-				decodeSymbolInstances();
-				return regBmp;                  /* 4) */
+				regBmp = new JB2Bmp(regInfo.width, regInfo.height, defPix);
+				DecodeSymbolInstances();
+				return regBmp;						/* 4) */
 			}
-			private long decodeStripT() {
-				long stripT;
-				if (!isHuffman)
-					stripT = arithmeticDecoder.decodeInt(cxIADT);
-				else if (sbHuffDT != 3)
-					stripT = HuffmanTable.getStdTbl(11 + sbHuffDT).decode(imgStrm);
-				else {       /* 6.4.6 */
-					if (table == null) {    // TODO test user-specified table
-						int dtNr = 0;
-						if (sbHuffFS == 3) dtNr++;
-						if (sbHuffDS == 3) dtNr++;
-						table = getUserTable(dtNr);
-					}
-					stripT = table.decode(imgStrm);
-				}
-				return stripT * -(sbStrips);
-			}
-			private void decodeSymbolInstances() {
-				long stripT = decodeStripT(), firstS = 0, instanceCounter = 0; /* Last two sentences of 6.4.5 2) */
-				while (instanceCounter < amtOfSymbInst) { /* 6.4.5 3 a) */
-					stripT += decodeDT();
+			void DecodeSymbolInstances() {
+				long stripT = DecodeStripT(-sbStrips);				/* Last two sentences of 6.4.5 2) */
+				for (long c = 0, s1 = 0; c < amtOfSymbInst; ) {		/* 6.4.5 3 a) */
+					stripT += DecodeStripT(sbStrips);
 					bool first = true;                              /* 3 c) symbol instances in the strip */
-					for (currentS = 0; ; instanceCounter++) {       // do until OOB
+					for (currentS = 0; ; c++) {						// do until OOB
 						if (first) {								/* 3 c) i) - first symbol instance in the strip */
-							currentS = firstS += decodeDfS();/* 6.4.7 */
+							currentS = s1 += DecodeDfS();			/* 6.4.7 */
 							first = false;
 						}											/* 3 c) ii) - the remaining symbol instances in the strip */
 						else {
-							long idS = decodeIdS();                 /* 6.4.8 */
-							if (idS == long.MaxValue || instanceCounter >= amtOfSymbInst)
+							long idS = DecodeIdS();                 /* 6.4.8 */
+							if (idS == long.MaxValue || c >= amtOfSymbInst)
 								break;
 							currentS += (idS + sbdsOffset);
 						}
-						long t = stripT + decodeCurrentT();         /* 3 c) iii) */
-						long id = decodeID();                       /* 3 c) iv) */
-						long r = decodeRI();                        /* 3 c) v) */
-						JB2Bmp ib = decodeIb(r, id);                /* 6.4.11 */
+						long t  = stripT + DecodeCurrentT();        /* 3 c) iii) */
+						long id = DecodeID();                       /* 3 c) iv) */
+						long r  = DecodeRI();                       /* 3 c) v) */
+						JB2Bmp ib = DecodeIb(r, id);                /* 6.4.11 */
 						blit(ib, t);                                /* vi) */
 					}
 				}
 			}
-			private long decodeDT() {           /* 3) b)  6.4.6 */
-				long dT;
-				if (isHuffman)
-					dT = (sbHuffDT == 3) ? table.decode(imgStrm)
-						: HuffmanTable.getStdTbl(11 + sbHuffDT).decode(imgStrm);
-				else
-					dT = arithmeticDecoder.decodeInt(cxIADT);
-				return (dT * sbStrips);
-			}
-			private long decodeDfS() {
+			long DecodeStripT(int s) {
 				if (!isHuffman)
-					return arithmeticDecoder.decodeInt(cxIAFS);
+					return s * arithDecoder.DecodeInt(cxIADT);
+				if (sbHuffDT != 3)
+					return s * HuffmanTable.GetStdTbl(11 + sbHuffDT).Decode(imgStrm);
+				table = table ?? segHdr.GetUserTable(sbHuffFS, sbHuffDS);
+				return s * table.Decode(imgStrm);
+			}
+			long DecodeDfS() {
+				if (!isHuffman)
+					return arithDecoder.DecodeInt(cxIAFS);
 				if (sbHuffFS != 3)
-					return HuffmanTable.getStdTbl(6 + sbHuffFS).decode(imgStrm);
-				return (fsTable = fsTable ?? getUserTable(0)).decode(imgStrm);
+					return HuffmanTable.GetStdTbl(6 + sbHuffFS).Decode(imgStrm);
+				return (fsTable = fsTable ?? segHdr.GetUserTable()).Decode(imgStrm);
 			}
-			private long decodeIdS() {
+			long DecodeIdS() {
 				if (!isHuffman)
-					return arithmeticDecoder.decodeInt(cxIADS);
+					return arithDecoder.DecodeInt(cxIADS);
 				if (sbHuffDS != 3)
-					return HuffmanTable.getStdTbl(8 + sbHuffDS).decode(imgStrm);
-				return (dsTable = dsTable ?? getUserTable((sbHuffFS == 3) ? 1 : 0)).decode(imgStrm);
+					return HuffmanTable.GetStdTbl(8 + sbHuffDS).Decode(imgStrm);
+				return (dsTable = dsTable ?? segHdr.GetUserTable(sbHuffFS)).Decode(imgStrm);
 			}
-			private long decodeCurrentT() {
+			long DecodeCurrentT() {
 				if (sbStrips == 1) return 0;
-				return isHuffman ? imgStrm.readBits(logSBStrips) : arithmeticDecoder.decodeInt(cxIAIT);
+				return isHuffman ? imgStrm.ReadBits(logSBStrips) : arithDecoder.DecodeInt(cxIAIT);
 			}
-			private long decodeID() {
+			long DecodeID() {
 				if (!isHuffman)
-					return arithmeticDecoder.decodeIAID(symbolCodeLength, cxIAID);
-				return (symbolCodeTable == null) ? imgStrm.readBits(symbolCodeLength)
-												 : symbolCodeTable.decode(imgStrm);
+					return arithDecoder.DecodeIAID(symbCodeLen, cxIAID);
+				return (symbCodeTbl == null) 
+					? imgStrm.ReadBits(symbCodeLen) : symbCodeTbl.Decode(imgStrm);
 			}
-			private long decodeRI() {
+			long DecodeRI() {
 				if (!useRefinement) return 0;
-				return isHuffman ? imgStrm.readBits(1) : arithmeticDecoder.decodeInt(cxIARI);
+				return isHuffman ? imgStrm.ReadBits(1) : arithDecoder.DecodeInt(cxIARI);
 			}
-			private JB2Bmp decodeIb(long r, long id) {
+			JB2Bmp DecodeIb(long r, long id) {
 				JB2Bmp ib;
 				if (r == 0)
 					ib = symbols[(int)id];
-				else {                                  /* 1) - 4) */
-					long rdw = decodeRdw(), rdh = decodeRdh(), rdx = decodeRdx(), rdy = decodeRdy();
-					if (isHuffman) {             /* 5) */
-						decodeSymInRefSize();
-						imgStrm.skipBits();
+				else {										/* 1) - 4) */
+					long rdw = DecodeRdw(), rdh = DecodeRdh(), rdx = DecodeRdx(), rdy = DecodeRdy();
+					if (isHuffman) {						/* 5) */
+						DecodeSymInRefSize();
+						imgStrm.Seek(0, SeekOrigin.Current);// clear bitBuffer
 					}
-					JB2Bmp ibo = symbols[(int)id];      /* 6) */
-					int wo = ibo.width,  genRegRefDX = (int)((rdw >> 1) + rdx),
-						ho = ibo.height, genRegRefDY = (int)((rdh >> 1) + rdy);
+					JB2Bmp ibo = symbols[(int)id];			/* 6) */
 					genRefineReg = genRefineReg ?? new GenRefineRegion(imgStrm);
-					genRefineReg.setParameters(cx, arithmeticDecoder, sbrTemplate,
-							(int)(wo + rdw), (int)(ho + rdh), ibo, genRegRefDX, genRegRefDY, sbrATX, sbrATY);
-					ib = genRefineReg.getRegBmp();
-					if (isHuffman)               /* 7 */
-						imgStrm.skipBits();
+					genRefineReg.SetParams(cx, arithDecoder, sbrTemplate,
+							(int)(ibo.width + rdw), (int)(ibo.height + rdh), ibo,
+							(int)((rdw >> 1) + rdx), (int)((rdh >> 1) + rdy), sbrATX, sbrATY);
+					ib = genRefineReg.GetRegBmp();
+					if (isHuffman)							/* 7 */
+						imgStrm.Seek(0, SeekOrigin.Current);// clear bitBuffer
 				}
 				return ib;
 			}
-			private long decodeRdw() {
+			long DecodeRdw() {
 				if (!isHuffman)
-					return arithmeticDecoder.decodeInt(cxIARDW);
+					return arithDecoder.DecodeInt(cxIARDW);
 				if (sbHuffRDWidth != 3)
-					return HuffmanTable.getStdTbl(14 + sbHuffRDWidth).decode(imgStrm);
-				if (rdwTable == null) { // TODO test user-specified table
-					int rdwNr = 0;
-					if (sbHuffFS == 3) rdwNr++;
-					if (sbHuffDS == 3) rdwNr++;
-					if (sbHuffDT == 3) rdwNr++;
-					rdwTable = getUserTable(rdwNr);
-				}
-				return rdwTable.decode(imgStrm);
+					return HuffmanTable.GetStdTbl(14 + sbHuffRDWidth).Decode(imgStrm);
+				rdwTable = rdwTable ?? segHdr.GetUserTable(sbHuffFS, sbHuffDS, sbHuffDT);
+				return rdwTable.Decode(imgStrm);
 			}
-			private long decodeRdh() {
+			long DecodeRdh() {
 				if (!isHuffman)
-					return arithmeticDecoder.decodeInt(cxIARDH);
+					return arithDecoder.DecodeInt(cxIARDH);
 				if (sbHuffRDHeight != 3)
-					return HuffmanTable.getStdTbl(14 + sbHuffRDHeight).decode(imgStrm);
-				if (rdhTable == null) {
-					int rdhNr = 0;
-					if (sbHuffFS == 3) rdhNr++;
-					if (sbHuffDS == 3) rdhNr++;
-					if (sbHuffDT == 3) rdhNr++;
-					if (sbHuffRDWidth == 3) rdhNr++;
-					rdhTable = getUserTable(rdhNr);
-				}
-				return rdhTable.decode(imgStrm);
+					return HuffmanTable.GetStdTbl(14 + sbHuffRDHeight).Decode(imgStrm);
+				rdhTable = rdhTable ?? segHdr.GetUserTable(sbHuffFS, sbHuffDS, sbHuffDT, sbHuffRDWidth);
+				return rdhTable.Decode(imgStrm);
 			}
-			private long decodeRdx() {
+			long DecodeRdx() {
 				if (!isHuffman)
-					return arithmeticDecoder.decodeInt(cxIARDX);
+					return arithDecoder.DecodeInt(cxIARDX);
 				if (sbHuffRDX != 3)
-					return HuffmanTable.getStdTbl(14 + sbHuffRDX).decode(imgStrm);
-				if (rdxTable == null) {
-					int rdxNr = 0;
-					if (sbHuffFS == 3) rdxNr++;
-					if (sbHuffDS == 3) rdxNr++;
-					if (sbHuffDT == 3) rdxNr++;
-					if (sbHuffRDWidth == 3) rdxNr++;
-					if (sbHuffRDHeight == 3) rdxNr++;
-					rdxTable = getUserTable(rdxNr);
-				}
-				return rdxTable.decode(imgStrm);
+					return HuffmanTable.GetStdTbl(14 + sbHuffRDX).Decode(imgStrm);
+				rdxTable = rdxTable 
+					?? segHdr.GetUserTable(sbHuffFS, sbHuffDS, sbHuffDT, sbHuffRDWidth, sbHuffRDHeight);
+				return rdxTable.Decode(imgStrm);
 			}
-			private long decodeRdy() {
+			long DecodeRdy() {
 				if (!isHuffman)
-					return arithmeticDecoder.decodeInt(cxIARDY);
+					return arithDecoder.DecodeInt(cxIARDY);
 				if (sbHuffRDY != 3)
-					return HuffmanTable.getStdTbl(14 + sbHuffRDY).decode(imgStrm);
-				if (rdyTable == null) {
-					int rdyNr = 0;
-					if (sbHuffFS == 3) rdyNr++;
-					if (sbHuffDS == 3) rdyNr++;
-					if (sbHuffDT == 3) rdyNr++;
-					if (sbHuffRDWidth == 3) rdyNr++;
-					if (sbHuffRDHeight == 3) rdyNr++;
-					if (sbHuffRDX == 3) rdyNr++;
-					rdyTable = getUserTable(rdyNr);
-				}
-				return rdyTable.decode(imgStrm);
+					return HuffmanTable.GetStdTbl(14 + sbHuffRDY).Decode(imgStrm);
+				rdyTable = rdyTable 
+					?? segHdr.GetUserTable(sbHuffFS, sbHuffDS, sbHuffDT, sbHuffRDWidth, sbHuffRDHeight, sbHuffRDX);
+				return rdyTable.Decode(imgStrm);
 			}
-			private long decodeSymInRefSize() {
+			long DecodeSymInRefSize() {
 				if (sbHuffRSize == 0)
-					return HuffmanTable.getStdTbl(1).decode(imgStrm);
-				if (rSizeTable == null) {
-					int rSizeNr = 0;
-					if (sbHuffFS == 3) rSizeNr++;
-					if (sbHuffDS == 3) rSizeNr++;
-					if (sbHuffDT == 3) rSizeNr++;
-					if (sbHuffRDWidth == 3) rSizeNr++;
-					if (sbHuffRDHeight == 3) rSizeNr++;
-					if (sbHuffRDX == 3) rSizeNr++;
-					if (sbHuffRDY == 3) rSizeNr++;
-					rSizeTable = getUserTable(rSizeNr);
-				}
-				return rSizeTable.decode(imgStrm);
+					return HuffmanTable.GetStdTbl(1).Decode(imgStrm);
+				rSizeTable = rSizeTable 
+					?? segHdr.GetUserTable(sbHuffFS, sbHuffDS, sbHuffDT, sbHuffRDWidth, sbHuffRDHeight, sbHuffRDX, sbHuffRDY);
+				return rSizeTable.Decode(imgStrm);
 			}
-			private void blit(JB2Bmp ib, long t) {
+			void blit(JB2Bmp ib, long t) {
 				if (isTransposed == 0 && (refCorner == 2 || refCorner == 3))
 					currentS += ib.width - 1;
 				else if (isTransposed == 1 && (refCorner == 0 || refCorner == 2))
 					currentS += ib.height - 1;
 				long s = currentS;                      /* vii) */
 				if (isTransposed == 1)					/* viii) */
-					(t, s) = (s, t);
+					(t, s) = (s, t);					// swap
 				if (refCorner != 1) {
-					if (refCorner == 0)         // BL
+					if (refCorner == 0)					// BL
 						t -= ib.height - 1;
-					else if (refCorner == 2) {  // BR
+					else if (refCorner == 2) {			// BR
 						t -= ib.height - 1;
 						s -= ib.width - 1;
 					}
-					else if (refCorner == 3)        // TR
+					else if (refCorner == 3)			// TR
 						s -= ib.width - 1;
 				}
 				ib.blit(regBmp, (int)s, (int)t, comboOper); /* x) */
@@ -3639,29 +3421,19 @@ namespace XPdf {
 				if (isTransposed == 1 && (refCorner == 1 || refCorner == 3))
 					currentS += ib.height - 1;
 			}
-			private void initSymbols() {
-				foreach (SegmentHeader segment in segHdr.getRtSegments())
+			void InitSymbols() {
+				foreach (SegmentHeader segment in segHdr.rtSegments)
 					if (segment.segType == 0) {
-						SymbolDictionary sd = (SymbolDictionary)segment.getSegData();
+						SymbolDictionary sd = (SymbolDictionary)segment.GetSegData();
 						sd.cxIAID = cxIAID;
-						symbols.AddRange(sd.getDictionary());
+						symbols.AddRange(sd.GetDictionary());
 					}
 				amtOfSymb = symbols.Count();
 			}
-			private HuffmanTable getUserTable(int tablePosition) {
-				int tableCounter = 0;
-				foreach (SegmentHeader referredToSegmentHeader in segHdr.getRtSegments())
-					if (referredToSegmentHeader.segType == 53)
-						if (tableCounter == tablePosition)
-							return ((Table)referredToSegmentHeader.getSegData()).getHuffman();
-						else
-							tableCounter++;
-				return null;
-			}
-			private void symbolIDCodeLengths() {
+			void SymbolIDCodeLengths() {
 				var runCodeTable = new List<HuffmanTable.Code>();         /* 1) - 2) */
 				for (int i = 0; i < 35; i++) {
-					int prefLen = imgStrm.readBits(4) & 0xf;
+					int prefLen = imgStrm.ReadBits(4) & 0xf;
 					if (prefLen > 0)
 						runCodeTable.Add(new HuffmanTable.Code(prefLen, 0, i, false));
 				}
@@ -3669,7 +3441,7 @@ namespace XPdf {
 				long prevLen = 0;                        /* 3) - 5) */
 				var sbSymCodes = new List<HuffmanTable.Code>();
 				for (int cnt = 0; cnt < amtOfSymb;) {
-					long code = ht.decode(imgStrm);
+					long code = ht.Decode(imgStrm);
 					if (code < 32) {
 						if (code > 0)
 							sbSymCodes.Add(new HuffmanTable.Code((int)code, 0, cnt, false));
@@ -3679,88 +3451,78 @@ namespace XPdf {
 					else {
 						long runLen = 0, curLen = 0;
 						if (code == 32) {
-							runLen = 3 + imgStrm.readBits(2);
+							runLen = 3 + imgStrm.ReadBits(2);
 							if (cnt > 0)
 								curLen = prevLen;
 						}
 						else if (code == 33)
-							runLen = 3 + imgStrm.readBits(3);
+							runLen = 3 + imgStrm.ReadBits(3);
 						else if (code == 34)
-							runLen = 11 + imgStrm.readBits(7);
+							runLen = 11 + imgStrm.ReadBits(7);
 						for (int j = 0; j < runLen; j++, cnt++)
 							if (curLen > 0)
 								sbSymCodes.Add(new HuffmanTable.Code((int)curLen, 0, cnt, false));
 					}
 				}
-				imgStrm.skipBits();                     /* 6) - Skip remaining bits in the last Byte */
-				symbolCodeTable = new HuffmanTable(sbSymCodes); /* 7) */
+				imgStrm.Seek(0, SeekOrigin.Current); // clear bitBuffer
+				symbCodeTbl = new HuffmanTable(sbSymCodes); /* 7) */
 			}
-			internal override void init(SegmentHeader header, ImgStream sis) {
-				base.init(header, sis);
-				sbrTemplate		= imgStrm.readBits(1);				/* Bit 15 */
-				sbdsOffset		= imgStrm.readBits(5);				/* Bit 10-14 */
-				if (sbdsOffset > 0x0f)
-					sbdsOffset -= 0x20;
-				defPix			= imgStrm.readBits(1);				/* Bit 9 */
-				comboOper		= (ComboOper)(imgStrm.readBits(2) & 0x3);	/* Bit 7-8 */
-				isTransposed	= imgStrm.readBits(1);				/* Bit 6 */
-				refCorner		= imgStrm.readBits(2) & 0x3;		/* Bit 4-5 */
-				logSBStrips		= imgStrm.readBits(2) & 0x3;		/* Bit 2-3 */
+			internal override void Init(SegmentHeader header, ImgStream sis) {
+				base.Init(header, sis);
+				int flags = imgStrm.ReadInt(2);
+				sbrTemplate		= (flags & 0x8000) != 0;			/* Bit 15 */
+				sbdsOffset		= (flags >> 10) & 0x1f;				/* Bit 10-14 */
+				if (sbdsOffset > 0x0f) sbdsOffset -= 0x20;
+				defPix			= (flags & 0x200) != 0;				/* Bit 9 */
+				comboOper		= (ComboOper)((flags >> 7) & 0x3);	/* Bit 7-8 */
+				isTransposed	= (flags >> 6) & 0x01;				/* Bit 6 */
+				refCorner		= (flags >> 4) & 0x3;				/* Bit 4-5 */
+				logSBStrips		= (flags >> 2) & 0x3;				/* Bit 2-3 */
 				sbStrips		= 1 << logSBStrips;
-				useRefinement = imgStrm.readBits(1) == 1;			/* Bit 1 */
-				isHuffman = imgStrm.readBits(1) == 1;				/* Bit 0 */
+				useRefinement	= (flags & 0x02) != 0;				/* Bit 1 */
+				isHuffman		= (flags & 0x01) != 0;				/* Bit 0 */
 				if (isHuffman) {
-					imgStrm.readBits(1);                            // Bit 15 Dirty read...
-					sbHuffRSize = imgStrm.readBits(1);              /* Bit 14 */
-					sbHuffRDY = imgStrm.readBits(2) & 0xf;			/* Bit 12-13 */
-					sbHuffRDX = imgStrm.readBits(2) & 0xf;			/* Bit 10-11 */
-					sbHuffRDHeight = imgStrm.readBits(2) & 0xf;		/* Bit 8-9 */
-					sbHuffRDWidth = imgStrm.readBits(2) & 0xf;		/* Bit 6-7 */
-					sbHuffDT = imgStrm.readBits(2) & 0xf;			/* Bit 4-5 */
-					sbHuffDS = imgStrm.readBits(2) & 0xf;			/* Bit 2-3 */
-					sbHuffFS = imgStrm.readBits(2) & 0xf;			/* Bit 0-1 */
+					flags = imgStrm.ReadInt(2);
+					sbHuffRSize		= (flags >> 14) & 1;            /* Bit 14 */
+					sbHuffRDY		= (flags >> 12) & 3;			/* Bit 12-13 */
+					sbHuffRDX		= (flags >> 10) & 3;			/* Bit 10-11 */
+					sbHuffRDHeight	= (flags >>  8) & 3;			/* Bit 8-9 */
+					sbHuffRDWidth	= (flags >>  6) & 3;			/* Bit 6-7 */
+					sbHuffDT		= (flags >>  4) & 3;			/* Bit 4-5 */
+					sbHuffDS		= (flags >>  2) & 3;			/* Bit 2-3 */
+					sbHuffFS		= flags & 3;					/* Bit 0-1 */
 				}
-				if (useRefinement && sbrTemplate == 0) {
+				if (useRefinement && !sbrTemplate) {
 					(sbrATX, sbrATY) = (new short[2], new short[2]);
-					sbrATX[0] = imgStrm.readSByte();				/* Byte 0 */
-					sbrATY[0] = imgStrm.readSByte();				/* Byte 1 */
-					sbrATX[1] = imgStrm.readSByte();				/* Byte 2 */
-					sbrATY[1] = imgStrm.readSByte();				/* Byte 3 */
+					(sbrATX[0], sbrATY[0]) = (imgStrm.ReadSByte(), imgStrm.ReadSByte());
+					(sbrATX[1], sbrATY[1]) = (imgStrm.ReadSByte(), imgStrm.ReadSByte());
 				}
-				amtOfSymbInst = imgStrm.readInt(4);
+				amtOfSymbInst = imgStrm.ReadInt(4);
 				long pixels = regInfo.width * regInfo.height;
 				if (pixels < amtOfSymbInst)				// don't decode more than 1 symbol/pixel
 					amtOfSymbInst = pixels;
-				if (segHdr.getRtSegments() != null)
-					initSymbols();									/* 7.4.3.1.7 */
+				if (segHdr.rtSegments != null)
+					InitSymbols();									/* 7.4.3.1.7 */
 				if (isHuffman)
-					symbolIDCodeLengths();
+					SymbolIDCodeLengths();
 				else
-					symbolCodeLength = (int)Math.Ceiling((Math.Log(amtOfSymb) / Math.Log(2)));
+					symbCodeLen = GetMaxBit(amtOfSymb);
 				if (!useRefinement)
-					sbrTemplate = 0;
+					sbrTemplate = false;
 				if (sbHuffFS==2 || sbHuffRDWidth==2 || sbHuffRDHeight==2 || sbHuffRDX==2 || sbHuffRDY==2)
 					throw new Exception("Huffman flag value of text region segment is not permitted");
 				if (!useRefinement)
 					sbHuffRSize = sbHuffRDY = sbHuffRDX = sbHuffRDWidth = sbHuffRDHeight = 0;
 			}
-			internal void setContexts(CXStats cx, CXStats cxIADT, CXStats cxIAFS, CXStats cxIADS,
-					CXStats cxIAIT, CXStats cxIAID, CXStats cxIARDW, CXStats cxIARDH, CXStats cxIARDX, CXStats cxIARDY) {
-				this.cx = cx;
-				this.cxIADT = cxIADT;
-				this.cxIAFS = cxIAFS;
-				this.cxIADS = cxIADS;
-				this.cxIAIT = cxIAIT;
-				this.cxIAID = cxIAID;
-				this.cxIARDW = cxIARDW;
-				this.cxIARDH = cxIARDH;
-				this.cxIARDX = cxIARDX;
-				this.cxIARDY = cxIARDY;
+			internal void SetContexts(CXStats cx, CXStats dt, CXStats fs, CXStats ds,
+					CXStats it, CXStats id, CXStats rdw, CXStats rdh, CXStats rdx, CXStats rdy) {
+				(this.cx, cxIADT, cxIAFS, cxIADS, cxIAIT, cxIAID, cxIARDW, cxIARDH, cxIARDX, cxIARDY)
+					= (cx, dt, fs, ds, it, id, rdw, rdh, rdx, rdy);
 			}
-			internal void setParameters(ArithmDecoder arithmeticDecoder, bool isHuffman, int sbw,
-					int sbh, long sbNumInstances, int sbNumSyms, int sbrTemplate, 
+			internal void SetParams(ArithmDecoder arithDecoder, bool isHuffman, int sbw,
+					int sbh, long sbNumInstances, int sbNumSyms, bool sbrTemplate, 
 					short[] sbrATX, short[] sbrATY, List<JB2Bmp> sbSyms, int sbSymCodeLen) {
-				this.arithmeticDecoder = arithmeticDecoder;
+				this.arithDecoder = arithDecoder;
 				this.isHuffman = isHuffman;
 				this.regInfo.width = sbw;
 				this.regInfo.height = sbh;
@@ -3770,328 +3532,312 @@ namespace XPdf {
 				this.sbrATX = sbrATX;
 				this.sbrATY = sbrATY;
 				this.symbols = sbSyms;
-				this.symbolCodeLength = sbSymCodeLen;
+				this.symbCodeLen = sbSymCodeLen;
 				this.useRefinement = true;
 				this.comboOper = 0;
 				this.refCorner = this.sbStrips = 1;
-				defPix = isTransposed = sbdsOffset = sbHuffFS = sbHuffDS = sbHuffDT 
+				this.defPix = false;
+				isTransposed = sbdsOffset = sbHuffFS = sbHuffDS = sbHuffDT 
 					= sbHuffRDWidth = sbHuffRDHeight = sbHuffRDX = sbHuffRDY = sbHuffRSize = 0;
 			}
 		}
 		internal class GenRegion : Region {
-			internal bool useExtTemplates, isTPGDon;			/** Generic region segment flags, 7.4.6.2 */
-			int gbTemplate;
-			short[] gbAtX, gbAtY;								/** Generic region segment AT flags, 7.4.6.3 */
-			bool[] gbAtOverride;
-			bool fOverride, isMMR;                      
+			bool	useExtTemplates, isTPGDon;			
+			int		gbTemplate;
+			short[] gbAtX, gbAtY;				/** Generic region segment AT flags, 7.4.6.3 */
+			bool[]	gbAtOverride;
+			bool	fOverride, isMMR;                      
 			ArithmDecoder arithDecoder;
 			CXStats cx;
 			MMRDecompressor mmrDecompressor;
 			public GenRegion() {
 			}
-			public GenRegion(ImgStream subInputStream) {
-				this.imgStrm = subInputStream;
-				this.regInfo = new RegSegInfo(subInputStream);
+			public GenRegion(ImgStream sis) {
+				this.imgStrm = sis;
+				this.regInfo = new RegSegInfo(sis);
 			}
-			internal override JB2Bmp getRegBmp() {
+			internal override JB2Bmp GetRegBmp() {
 				if (null != regBmp) return regBmp;
 				if (isMMR) {
 					if (null == mmrDecompressor)                    // MMR DECODER CALL
 						mmrDecompressor = new MMRDecompressor(regInfo.width, regInfo.height, imgStrm, dataLength);
-					regBmp = mmrDecompressor.uncompress();  /* 6.2.6 */
+					regBmp = mmrDecompressor.Uncompress();  /* 6.2.6 */
 				}
 				else {
-					updateOverrideFlags();                          // ARITHMETIC DECODER PROCEDURE for generic region segments
+					UpdateOverrideFlags();                          // ARITHMETIC DECODER PROCEDURE for generic region segments
 					arithDecoder = arithDecoder ?? new ArithmDecoder(imgStrm);
 					cx = cx ?? new CXStats(65536);                      /* 6.2.5.7 - 2) */
 					regBmp = new JB2Bmp(regInfo.width, regInfo.height);
-					int paddedWidth = (regBmp.width + 7) & -8;
+					int pad = (regBmp.width + 7) & -8;
 					for (int ltp = 0, line = 0; line < regBmp.height; line++) {
+						int dst = line * regBmp.stride, src = dst - regBmp.stride;
 						if (isTPGDon)                               /* 6.2.5.7 - 3 b) */
-							ltp ^= decodeSLTP();
+							ltp ^= DecodeSLTP();
 						if (ltp != 1)                               /* 6.2.5.7 - 3 c) */
-							decodeLine(line, regBmp.width, regBmp.stride, paddedWidth);
+							switch (gbTemplate) {
+								case 0:
+									if (!useExtTemplates)
+										DecodeTemplate0a(line, pad, dst, src, regBmp.width, regBmp.stride);
+									else
+										DecodeTemplate0b(line, pad, dst, src, regBmp.width, regBmp.stride);
+									break;
+								case 1: DecodeTemplate1(line, pad, dst, src, regBmp.width, regBmp.stride); break;
+								case 2: DecodeTemplate2(line, pad, dst, src, regBmp.width, regBmp.stride); break;
+								case 3: DecodeTemplate3(line, pad, dst, src); break;
+							}
 						else if (line > 0)
-							copyLineAbove(line);
+							Array.Copy(regBmp.bitmap, src, regBmp.bitmap, dst, regBmp.stride);
 					}
 				}
 				return regBmp;
 			}
-			private int decodeSLTP() {
+			int DecodeSLTP() {
 				int ctx = 0;
 				switch (gbTemplate) {
-					case 0: ctx = 0x9b25; break;
-					case 1: ctx = 0x795; break;
-					case 2: ctx = 0xe5; break;
-					case 3: ctx = 0x195; break;
+					case 0: ctx = 0x9b25;	break;
+					case 1: ctx = 0x0795;	break;
+					case 2: ctx = 0x00e5;	break;
+					case 3: ctx = 0x0195;	break;
 				}
-				return arithDecoder.decodeBit(ctx, cx);
+				return arithDecoder.DecodeBit(ctx, cx);
 			}
-			private void decodeLine(int lnNo, int width, int stride, int padWidth) {
-				int byteIndex = regBmp.getIdx(0, lnNo), idx = byteIndex - stride;
-				switch (gbTemplate) {
-					case 0:
-						if (!useExtTemplates)
-							decodeTemplate0a(lnNo, width, stride, padWidth, byteIndex, idx);
-						else
-							decodeTemplate0b(lnNo, width, stride, padWidth, byteIndex, idx);
-						break;
-					case 1: decodeTemplate1(lnNo, width, stride, padWidth, byteIndex, idx); break;
-					case 2: decodeTemplate2(lnNo, width, stride, padWidth, byteIndex, idx); break;
-					case 3: decodeTemplate3(lnNo, width, padWidth, byteIndex, idx); break;
-				}
-			}
-			private void copyLineAbove(int lineNumber) {
-				int targetByteIndex = lineNumber * regBmp.stride;
-				int sourceByteIndex = targetByteIndex - regBmp.stride;
-				for (int i = 0; i < regBmp.stride; i++)
-					regBmp.bitmap[targetByteIndex++] = regBmp.bitmap[sourceByteIndex++];
-			}
-			private void decodeTemplate0a(int lineNo, int width, int stride, int padWidth, int byteIdx, int idx) {
-				int line1 = (lineNo >= 1) ? regBmp.getInt(idx) : 0;
-				int line2 = (lineNo >= 2) ? regBmp.getInt(idx - stride) << 6 : 0;
-				int ctx = (line1 & 0xf0) | (line2 & 0x3800), nextByte;
-				for (int x = 0; x < padWidth; x = nextByte, idx++) {
-					nextByte = x + 8;
-					int minorWidth = width - x > 8 ? 8 : width - x, res = 0;
-					if (lineNo > 0)
+			void DecodeTemplate0a(int line, int pad, int dst, int src, int width, int stride) {
+				int line1 = (line >= 1) ? regBmp.GetInt(src) : 0, 
+					line2 = (line >= 2) ? regBmp.GetInt(src - stride) << 6 : 0, 
+					ctx = (line1 & 0xf0) | (line2 & 0x3800), nxtByte;
+				for (int x = 0; x < pad; x = nxtByte, src++) {
+					int minWidth = width - x > 8 ? 8 : width - x, res = 0;
+					nxtByte = x + 8;
+					if (line > 0)
 						line1 = (line1 << 8)
-							| (nextByte < width ? regBmp.getInt(idx + 1) : 0);
-					if (lineNo > 1)
+							| (nxtByte < width ? regBmp.GetInt(src + 1) : 0);
+					if (line > 1)
 						line2 = (line2 << 8)
-							| (nextByte < width ? regBmp.getInt(idx - stride + 1) << 6 : 0);
-					for (int minX = 0; minX < minorWidth; minX++) {
-						int toShift = 7 - minX;
-						int cxIdx = !fOverride ? ctx
-							: overrideAtTemplate0a(ctx, (x + minX), lineNo, res, minX, toShift);
-						int bit = arithDecoder.decodeBit(cxIdx, cx);
+							| (nxtByte < width ? regBmp.GetInt(src - stride + 1) << 6 : 0);
+					for (int minX = 0; minX < minWidth; minX++) {
+						int toShift = 7 - minX, 
+							cxIdx = !fOverride ? ctx
+								: OverrideAtTemplate0a(ctx, (x + minX), line, res, minX, toShift),
+							bit = arithDecoder.DecodeBit(cxIdx, cx);
 						res |= bit << toShift;
 						ctx = ((ctx & 0x7bf7) << 1) | bit | ((line1 >> toShift) & 0x10)
 								| ((line2 >> toShift) & 0x800);
 					}
-					regBmp.bitmap[byteIdx++] = (byte)res;
+					regBmp.bitmap[dst++] = (byte)res;
 				}
 			}
-			private void decodeTemplate0b(int lineNo, int width, int stride, int padWidth, int byteIdx, int idx) {
-				int line1 = (lineNo >= 1) ? regBmp.getInt(idx) : 0;
-				int line2 = (lineNo >= 2) ? regBmp.getInt(idx - stride) << 6 : 0;
-				int ctx = (line1 & 0xf0) | (line2 & 0x3800), nextByte;
-				for (int x = 0; x < padWidth; x = nextByte, idx++) {
-					nextByte = x + 8;
-					int minorWidth = width - x > 8 ? 8 : width - x, res = 0;	/* 6.2.5.7 3d */
-					if (lineNo > 0)
-						line1 = (line1 << 8)
-							| (nextByte < width ? regBmp.getInt(idx + 1) : 0);
-					if (lineNo > 1)
-						line2 = (line2 << 8)
-							| (nextByte < width ? regBmp.getInt(idx - stride + 1) << 6 : 0);
-					for (int minX = 0; minX < minorWidth; minX++) {
-						int toShift = 7 - minX;
-						int cxIdx = (!fOverride) ? ctx
-							: overrideAtTemplate0b(ctx, (x + minX), lineNo, res, minX, toShift);
-						int bit = arithDecoder.decodeBit(cxIdx, cx);
+			void DecodeTemplate0b(int line, int pad, int dst, int src, int width, int stride) {
+				int ln1 = (line >= 1) ? regBmp.GetInt(src) : 0,
+					ln2 = (line >= 2) ? regBmp.GetInt(src - stride) << 6 : 0,
+					ctx = (ln1 & 0xf0) | (ln2 & 0x3800), nxtByte;
+				for (int x = 0; x < pad; x = nxtByte, src++) {
+					int minWidth = width - x > 8 ? 8 : width - x, res = 0;  /* 6.2.5.7 3d */
+					nxtByte = x + 8;
+					if (line > 0)
+						ln1 = (ln1 << 8)
+							| (nxtByte < width ? regBmp.GetInt(src + 1) : 0);
+					if (line > 1)
+						ln2 = (ln2 << 8)
+							| (nxtByte < width ? regBmp.GetInt(src - stride + 1) << 6 : 0);
+					for (int minX = 0; minX < minWidth; minX++) {
+						int toShift = 7 - minX,
+							cxIdx = (!fOverride) ? ctx
+								: OverrideAtTemplate0b(ctx, (x + minX), line, res, minX, toShift),
+							bit = arithDecoder.DecodeBit(cxIdx, cx);
 						res |= bit << toShift;
-						ctx = ((ctx & 0x7bf7) << 1) | bit | ((line1 >> toShift) & 0x10)
-								| ((line2 >> toShift) & 0x800);
+						ctx = ((ctx & 0x7bf7) << 1) | bit | ((ln1 >> toShift) & 0x10)
+								| ((ln2 >> toShift) & 0x800);
 					}
-					regBmp.bitmap[byteIdx++] = (byte)res;
+					regBmp.bitmap[dst++] = (byte)res;
 				}
 			}
-			private void decodeTemplate1(int lineNo, int width, int stride, int padWidth, int byteIdx, int idx) {
-				int line1 = (lineNo >= 1) ? regBmp.getInt(idx) : 0;
-				int line2 = (lineNo >= 2) ? regBmp.getInt(idx - stride) << 5 : 0;
-				int ctx = ((line1 >> 1) & 0x1f8) | ((line2 >> 1) & 0x1e00);
-				int cxCtx, nextByte;
-				for (int x = 0; x < padWidth; x = nextByte, idx++) {
-					nextByte = x + 8;
-					int minorWidth = width - x > 8 ? 8 : width - x, res = 0;	/* 6.2.5.7 3d */
-					if (lineNo >= 1)
-						line1 = (line1 << 8)
-							| (nextByte < width ? regBmp.getInt(idx + 1) : 0);
-					if (lineNo >= 2)
-						line2 = (line2 << 8)
-							| (nextByte < width ? regBmp.getInt(idx - stride + 1) << 5 : 0);
-					for (int minX = 0; minX < minorWidth; minX++) {
-						cxCtx = !fOverride ? ctx
-							: overrideAtTemplate1(ctx, x + minX, lineNo, res, minX);
-						int bit = arithDecoder.decodeBit(cxCtx, cx);
+			void DecodeTemplate1(int line, int pad, int dst, int src, int width, int stride) {
+				int ln1 = (line >= 1) ? regBmp.GetInt(src) : 0,
+					ln2 = (line >= 2) ? regBmp.GetInt(src - stride) << 5 : 0, 
+					ctx = ((ln1 >> 1) & 0x1f8) | ((ln2 >> 1) & 0x1e00), nxtByte;
+				for (int x = 0; x < pad; x = nxtByte, src++) {
+					nxtByte = x + 8;
+					int minWidth = width - x > 8 ? 8 : width - x, res = 0;	/* 6.2.5.7 3d */
+					if (line >= 1)
+						ln1 = (ln1 << 8)
+							| (nxtByte < width ? regBmp.GetInt(src + 1) : 0);
+					if (line >= 2)
+						ln2 = (ln2 << 8)
+							| (nxtByte < width ? regBmp.GetInt(src - stride + 1) << 5 : 0);
+					for (int minX = 0; minX < minWidth; minX++) {
+						int cxCtx = !fOverride ? ctx
+								: OverrideAtTemplate1(ctx, x + minX, line, res, minX),
+							bit = arithDecoder.DecodeBit(cxCtx, cx), toShift = 8 - minX;
 						res |= bit << 7 - minX;
-						int toShift = 8 - minX;
-						ctx = ((ctx & 0xefb) << 1) | bit | ((line1 >> toShift) & 0x8)
-								| ((line2 >> toShift) & 0x200);
+						ctx = ((ctx & 0xefb) << 1) | bit | ((ln1 >> toShift) & 0x8)
+								| ((ln2 >> toShift) & 0x200);
 					}
-					regBmp.bitmap[byteIdx++] = (byte)res;
+					regBmp.bitmap[dst++] = (byte)res;
 				}
 			}
-			private void decodeTemplate2(int lnNum, int width, int stride, int padWidth, int byteIdx, int idx) {
-				int line1 = (lnNum >= 1) ? regBmp.getInt(idx) : 0;
-				int line2 = (lnNum >= 2) ? regBmp.getInt(idx - stride) << 4 : 0;
-				int ctx = ((line1 >> 3) & 0x7c) | ((line2 >> 3) & 0x380), nextByte;
-				for (int x = 0; x < padWidth; x = nextByte, idx++) {
-					nextByte = x + 8;
-					int minorWidth = width - x > 8 ? 8 : width - x, res = 0;	/* 6.2.5.7 3d */
-					if (lnNum >= 1)
-						line1 = (line1 << 8)
-							| (nextByte < width ? regBmp.getInt(idx + 1) : 0);
-					if (lnNum >= 2)
-						line2 = (line2 << 8)
-							| (nextByte < width ? regBmp.getInt(idx - stride + 1) << 4 : 0);
-					for (int minX = 0; minX < minorWidth; minX++) {
-						int cxCtx = !fOverride ? ctx : overrideAtTemplate2(ctx, x + minX, lnNum, res, minX);
-						int bit = arithDecoder.decodeBit(cxCtx, cx);
-						res |= bit << (7 - minX);
-						int toShift = 10 - minX;
-						ctx = ((ctx & 0x1bd) << 1) | bit | ((line1 >> toShift) & 0x4) | ((line2 >> toShift) & 0x80);
-					}
-					regBmp.bitmap[byteIdx++] = (byte)res;
-				}
-			}
-			private void decodeTemplate3(int lnNo, int width, int padWidth, int byteIdx, int idx) {
-				int line1 = (lnNo >= 1) ? regBmp.getInt(idx) : 0;
-				int ctx = (line1 >> 1) & 0x70, nxtByte;
-				for (int x = 0; x < padWidth; x = nxtByte, idx++) {
+			void DecodeTemplate2(int line, int pad, int dst, int src, int width, int stride) {
+				int ln1 = (line >= 1) ? regBmp.GetInt(src) : 0,
+					ln2 = (line >= 2) ? regBmp.GetInt(src - stride) << 4 : 0,
+					ctx = ((ln1 >> 3) & 0x7c) | ((ln2 >> 3) & 0x380), nxtByte;
+				for (int x = 0; x < pad; x = nxtByte, src++) {
 					nxtByte = x + 8;
 					int minorWidth = width - x > 8 ? 8 : width - x, res = 0;	/* 6.2.5.7 3d */
-					if (lnNo >= 1)
-						line1 = (line1 << 8) | (nxtByte < width ? regBmp.getInt(idx + 1) : 0);
+					if (line >= 1)
+						ln1 = (ln1 << 8)
+							| (nxtByte < width ? regBmp.GetInt(src + 1) : 0);
+					if (line >= 2)
+						ln2 = (ln2 << 8)
+							| (nxtByte < width ? regBmp.GetInt(src - stride + 1) << 4 : 0);
 					for (int minX = 0; minX < minorWidth; minX++) {
-						int cxCtx = !fOverride ? ctx : overrideAtTemplate3(ctx, x + minX, lnNo, res, minX);
-						int bit = arithDecoder.decodeBit(cxCtx, cx);
+						int cxCtx = !fOverride ? ctx : OverrideAtTemplate2(ctx, x + minX, line, res, minX),
+							bit = arithDecoder.DecodeBit(cxCtx, cx), toShift = 10 - minX;
 						res |= bit << (7 - minX);
-						ctx = ((ctx & 0x1f7) << 1) | bit | ((line1 >> (8 - minX)) & 0x010);
+						ctx = ((ctx & 0x1bd) << 1) | bit | ((ln1 >> toShift) & 0x4) | ((ln2 >> toShift) & 0x80);
 					}
-					regBmp.bitmap[byteIdx++] = (byte)res;
+					regBmp.bitmap[dst++] = (byte)res;
 				}
 			}
-			private void updateOverrideFlags() {
+			void DecodeTemplate3(int line, int pad, int dst, int src) {
+				int ln1 = (line >= 1) ? regBmp.GetInt(src) : 0;
+				int width = regBmp.width, ctx = (ln1 >> 1) & 0x70, nxtByte;
+				for (int x = 0; x < pad; x = nxtByte, src++) {
+					nxtByte = x + 8;
+					int minorWidth = width - x > 8 ? 8 : width - x, res = 0;	/* 6.2.5.7 3d */
+					if (line >= 1)
+						ln1 = (ln1 << 8) | (nxtByte < width ? regBmp.GetInt(src + 1) : 0);
+					for (int minX = 0; minX < minorWidth; minX++) {
+						int cxCtx = !fOverride ? ctx : OverrideAtTemplate3(ctx, x + minX, line, res, minX),
+							bit = arithDecoder.DecodeBit(cxCtx, cx);
+						res |= bit << (7 - minX);
+						ctx = ((ctx & 0x1f7) << 1) | bit | ((ln1 >> (8 - minX)) & 0x010);
+					}
+					regBmp.bitmap[dst++] = (byte)res;
+				}
+			}
+			void UpdateOverrideFlags() {
 				if (gbAtX == null || gbAtY == null) return;
 				if (gbAtX.Length != gbAtY.Length) return;
 				gbAtOverride = new bool[gbAtX.Length];
 				switch (gbTemplate) {
 					case 0:
 						if (!useExtTemplates) {
-							if (gbAtX[0] != 3 || gbAtY[0] != -1) setOverrideFlag(0);
-							if (gbAtX[1] != -3 || gbAtY[1] != -1) setOverrideFlag(1);
-							if (gbAtX[2] != 2 || gbAtY[2] != -2) setOverrideFlag(2);
-							if (gbAtX[3] != -2 || gbAtY[3] != -2) setOverrideFlag(3);
+							if (gbAtX[0] != 3  || gbAtY[0] != -1) SetOverrideFlag(0);
+							if (gbAtX[1] != -3 || gbAtY[1] != -1) SetOverrideFlag(1);
+							if (gbAtX[2] != 2  || gbAtY[2] != -2) SetOverrideFlag(2);
+							if (gbAtX[3] != -2 || gbAtY[3] != -2) SetOverrideFlag(3);
 						}
 						else {
-							if (gbAtX[0] != -2 || gbAtY[0] != 0) setOverrideFlag(0);
-							if (gbAtX[1] != 0 || gbAtY[1] != -2) setOverrideFlag(1);
-							if (gbAtX[2] != -2 || gbAtY[2] != -1) setOverrideFlag(2);
-							if (gbAtX[3] != -1 || gbAtY[3] != -2) setOverrideFlag(3);
-							if (gbAtX[4] != 1 || gbAtY[4] != -2) setOverrideFlag(4);
-							if (gbAtX[5] != 2 || gbAtY[5] != -1) setOverrideFlag(5);
-							if (gbAtX[6] != -3 || gbAtY[6] != 0) setOverrideFlag(6);
-							if (gbAtX[7] != -4 || gbAtY[7] != 0) setOverrideFlag(7);
-							if (gbAtX[8] != 2 || gbAtY[8] != -2) setOverrideFlag(8);
-							if (gbAtX[9] != 3 || gbAtY[9] != -1) setOverrideFlag(9);
-							if (gbAtX[10] != -2 || gbAtY[10] != -2) setOverrideFlag(10);
-							if (gbAtX[11] != -3 || gbAtY[11] != -1) setOverrideFlag(11);
+							if (gbAtX[0] != -2 || gbAtY[0] !=  0) SetOverrideFlag(0);
+							if (gbAtX[1] !=  0 || gbAtY[1] != -2) SetOverrideFlag(1);
+							if (gbAtX[2] != -2 || gbAtY[2] != -1) SetOverrideFlag(2);
+							if (gbAtX[3] != -1 || gbAtY[3] != -2) SetOverrideFlag(3);
+							if (gbAtX[4] !=  1 || gbAtY[4] != -2) SetOverrideFlag(4);
+							if (gbAtX[5] !=  2 || gbAtY[5] != -1) SetOverrideFlag(5);
+							if (gbAtX[6] != -3 || gbAtY[6] !=  0) SetOverrideFlag(6);
+							if (gbAtX[7] != -4 || gbAtY[7] !=  0) SetOverrideFlag(7);
+							if (gbAtX[8] !=  2 || gbAtY[8] != -2) SetOverrideFlag(8);
+							if (gbAtX[9] !=  3 || gbAtY[9] != -1) SetOverrideFlag(9);
+							if (gbAtX[10]!= -2 || gbAtY[10]!= -2) SetOverrideFlag(10);
+							if (gbAtX[11]!= -3 || gbAtY[11]!= -1) SetOverrideFlag(11);
 						}
 						break;
-					case 1: if (gbAtX[0] != 3 || gbAtY[0] != -1) setOverrideFlag(0); break;
-					case 2: if (gbAtX[0] != 2 || gbAtY[0] != -1) setOverrideFlag(0); break;
-					case 3: if (gbAtX[0] != 2 || gbAtY[0] != -1) setOverrideFlag(0); break;
+					case 1: if (gbAtX[0] != 3 || gbAtY[0] != -1) SetOverrideFlag(0); break;
+					case 2: if (gbAtX[0] != 2 || gbAtY[0] != -1) SetOverrideFlag(0); break;
+					case 3: if (gbAtX[0] != 2 || gbAtY[0] != -1) SetOverrideFlag(0); break;
 				}
 			}
-			private void setOverrideFlag(int index) {
+			void SetOverrideFlag(int index) {
 				gbAtOverride[index] = fOverride = true;
 			}
-			private int overrideAtTemplate0a(int ctx, int x, int y, int res, int minX, int toShift) {
+			int OverrideAtTemplate0a(int ctx, int x, int y, int res, int minX, int toShift) {
 				if (gbAtOverride[0])
 					ctx = (ctx & 0xffef) | (gbAtY[0] == 0 && gbAtX[0] >= -minX
-												? (res >> (toShift - gbAtX[0]) & 0x1) << 4
-												: getPixel(x + gbAtX[0], y + gbAtY[0]) << 4);
+								? (res >> (toShift - gbAtX[0]) & 0x1) << 4
+								: regBmp.GetPixel(x + gbAtX[0], y + gbAtY[0]) << 4);
 				if (gbAtOverride[1])
 					ctx = (ctx & 0xfbff) | (gbAtY[1] == 0 && gbAtX[1] >= -minX
-												? (res >> (toShift - gbAtX[1]) & 0x1) << 10
-												: getPixel(x + gbAtX[1], y + gbAtY[1]) << 10);
+								? (res >> (toShift - gbAtX[1]) & 0x1) << 10
+								: regBmp.GetPixel(x + gbAtX[1], y + gbAtY[1]) << 10);
 				if (gbAtOverride[2])
 					ctx = (ctx & 0xf7ff) | (gbAtY[2] == 0 && gbAtX[2] >= -minX
-												? (res >> (toShift - gbAtX[2]) & 0x1) << 11
-												: getPixel(x + gbAtX[2], y + gbAtY[2]) << 11);
+								? (res >> (toShift - gbAtX[2]) & 0x1) << 11
+								: regBmp.GetPixel(x + gbAtX[2], y + gbAtY[2]) << 11);
 				if (gbAtOverride[3])
 					ctx = (ctx & 0x7fff) | (gbAtY[3] == 0 && gbAtX[3] >= -minX
-												? (res >> (toShift - gbAtX[3]) & 0x1) << 15
-												: getPixel(x + gbAtX[3], y + gbAtY[3]) << 15);
+								? (res >> (toShift - gbAtX[3]) & 0x1) << 15
+								: regBmp.GetPixel(x + gbAtX[3], y + gbAtY[3]) << 15);
 				return ctx;
 			}
-			private int overrideAtTemplate0b(int ctx, int x, int y, int res, int minX, int shft) {
+			int OverrideAtTemplate0b(int ctx, int x, int y, int res, int minX, int shft) {
 				if (gbAtOverride[0])
 					ctx = (ctx & 0xfffd) | (gbAtY[0] == 0 && gbAtX[0] >= -minX
-											? (res >> (shft - gbAtX[0]) & 0x1) << 1
-											: getPixel(x + gbAtX[0], y + gbAtY[0]) << 1);
+								? (res >> (shft - gbAtX[0]) & 0x1) << 1
+								: regBmp.GetPixel(x + gbAtX[0], y + gbAtY[0]) << 1);
 				if (gbAtOverride[1])
 					ctx = (ctx & 0xdfff) | (gbAtY[1] == 0 && gbAtX[1] >= -minX
-											? (res >> (shft - gbAtX[1]) & 0x1) << 13
-											: getPixel(x + gbAtX[1], y + gbAtY[1]) << 13);
+								? (res >> (shft - gbAtX[1]) & 0x1) << 13
+								: regBmp.GetPixel(x + gbAtX[1], y + gbAtY[1]) << 13);
 				if (gbAtOverride[2])
 					ctx = (ctx & 0xfdff) | (gbAtY[2] == 0 && gbAtX[2] >= -minX
-											? (res >> (shft - gbAtX[2]) & 0x1) << 9
-											: getPixel(x + gbAtX[2], y + gbAtY[2]) << 9);
+								? (res >> (shft - gbAtX[2]) & 0x1) << 9
+								: regBmp.GetPixel(x + gbAtX[2], y + gbAtY[2]) << 9);
 				if (gbAtOverride[3])
 					ctx = (ctx & 0xbfff) | (gbAtY[3] == 0 && gbAtX[3] >= -minX
-											? (res >> (shft - gbAtX[3]) & 0x1) << 14
-											: getPixel(x + gbAtX[3], y + gbAtY[3]) << 14);
+								? (res >> (shft - gbAtX[3]) & 0x1) << 14
+								: regBmp.GetPixel(x + gbAtX[3], y + gbAtY[3]) << 14);
 				if (gbAtOverride[4])
 					ctx = (ctx & 0xefff) | (gbAtY[4] == 0 && gbAtX[4] >= -minX
-											? (res >> (shft - gbAtX[4]) & 0x1) << 12
-											: getPixel(x + gbAtX[4], y + gbAtY[4]) << 12);
+								? (res >> (shft - gbAtX[4]) & 0x1) << 12
+								: regBmp.GetPixel(x + gbAtX[4], y + gbAtY[4]) << 12);
 				if (gbAtOverride[5])
 					ctx = (ctx & 0xffdf) | (gbAtY[5] == 0 && gbAtX[5] >= -minX
-											? (res >> (shft - gbAtX[5]) & 0x1) << 5
-											: getPixel(x + gbAtX[5], y + gbAtY[5]) << 5);
+								? (res >> (shft - gbAtX[5]) & 0x1) << 5
+								: regBmp.GetPixel(x + gbAtX[5], y + gbAtY[5]) << 5);
 				if (gbAtOverride[6])
 					ctx = (ctx & 0xfffb) | (gbAtY[6] == 0 && gbAtX[6] >= -minX
-											? (res >> (shft - gbAtX[6]) & 0x1) << 2
-											: getPixel(x + gbAtX[6], y + gbAtY[6]) << 2);
+								? (res >> (shft - gbAtX[6]) & 0x1) << 2
+								: regBmp.GetPixel(x + gbAtX[6], y + gbAtY[6]) << 2);
 				if (gbAtOverride[7])
 					ctx = (ctx & 0xfff7) | (gbAtY[7] == 0 && gbAtX[7] >= -minX
-											? (res >> (shft - gbAtX[7]) & 0x1) << 3
-											: getPixel(x + gbAtX[7], y + gbAtY[7]) << 3);
+								? (res >> (shft - gbAtX[7]) & 0x1) << 3
+								: regBmp.GetPixel(x + gbAtX[7], y + gbAtY[7]) << 3);
 				if (gbAtOverride[8])
 					ctx = (ctx & 0xf7ff) | (gbAtY[8] == 0 && gbAtX[8] >= -minX
-											? (res >> (shft - gbAtX[8]) & 0x1) << 11
-											: getPixel(x + gbAtX[8], y + gbAtY[8]) << 11);
+								? (res >> (shft - gbAtX[8]) & 0x1) << 11
+								: regBmp.GetPixel(x + gbAtX[8], y + gbAtY[8]) << 11);
 				if (gbAtOverride[9])
 					ctx = (ctx & 0xffef) | (gbAtY[9] == 0 && gbAtX[9] >= -minX
-											? (res >> (shft - gbAtX[9]) & 0x1) << 4
-											: getPixel(x + gbAtX[9], y + gbAtY[9]) << 4);
+								? (res >> (shft - gbAtX[9]) & 0x1) << 4
+								: regBmp.GetPixel(x + gbAtX[9], y + gbAtY[9]) << 4);
 				if (gbAtOverride[10])
 					ctx = (ctx & 0x7fff) | (gbAtY[10] == 0 && gbAtX[10] >= -minX
-											? (res >> (shft - gbAtX[10]) & 0x1) << 15
-											: getPixel(x + gbAtX[10], y + gbAtY[10]) << 15);
+								? (res >> (shft - gbAtX[10]) & 0x1) << 15
+								: regBmp.GetPixel(x + gbAtX[10], y + gbAtY[10]) << 15);
 				if (gbAtOverride[11])
 					ctx = (ctx & 0xfdff) | (gbAtY[11] == 0 && gbAtX[11] >= -minX
-											? (res >> (shft - gbAtX[11]) & 0x1) << 10
-											: getPixel(x + gbAtX[11], y + gbAtY[11]) << 10);
+								? (res >> (shft - gbAtX[11]) & 0x1) << 10
+								: regBmp.GetPixel(x + gbAtX[11], y + gbAtY[11]) << 10);
 				return ctx;
 			}
-			private int overrideAtTemplate1(int ctx, int x, int y, int res, int minX) {
+			int OverrideAtTemplate1(int ctx, int x, int y, int res, int minX) {
 				ctx &= 0x1ff7;
 				return (gbAtY[0] == 0 && gbAtX[0] >= -minX)
 					? (ctx | (res >> (7 - (minX + gbAtX[0])) & 0x1) << 3)
-					: (ctx | getPixel(x + gbAtX[0], y + gbAtY[0]) << 3);
+					: (ctx | regBmp.GetPixel(x + gbAtX[0], y + gbAtY[0]) << 3);
 			}
-			private int overrideAtTemplate2(int ctx, int x, int y, int res, int minX) {
+			int OverrideAtTemplate2(int ctx, int x, int y, int res, int minX) {
 				ctx &= 0x3fb;
 				return (gbAtY[0] == 0 && gbAtX[0] >= -minX)
 					? (ctx | (res >> (7 - (minX + gbAtX[0])) & 0x1) << 2)
-					: (ctx | getPixel(x + gbAtX[0], y + gbAtY[0]) << 2);
+					: (ctx | regBmp.GetPixel(x + gbAtX[0], y + gbAtY[0]) << 2);
 			}
-			private int overrideAtTemplate3(int ctx, int x, int y, int res, int minX) {
+			int OverrideAtTemplate3(int ctx, int x, int y, int res, int minX) {
 				ctx &= 0x3ef;
 				return (gbAtY[0] == 0 && gbAtX[0] >= -minX)
 					? (ctx | (res >> (7 - (minX + gbAtX[0])) & 0x1) << 4)
-					: (ctx | getPixel(x + gbAtX[0], y + gbAtY[0]) << 4);
+					: (ctx | regBmp.GetPixel(x + gbAtX[0], y + gbAtY[0]) << 4);
 			}
-			private byte getPixel(int x, int y) {
-				if (x < 0 || x >= regBmp.width) return 0;
-				if (y < 0 || y >= regBmp.height) return 0;
-				return regBmp.getPixel(x, y);
-			}
-			internal void setParameters(long dataOffset, long dataLength, int gbh, int gbw) {
+			internal void SetParams(long dataOffset, long dataLength, int gbh, int gbw) {
 				this.isMMR = true;
 				this.dataOffset = dataOffset;
 				this.dataLength = dataLength;
@@ -4100,8 +3846,8 @@ namespace XPdf {
 				this.mmrDecompressor = null;
 				this.regBmp = null;
 			}
-			internal void setParameters(byte sdTemplate, short[] sdATX, short[] sdATY, 
-					int symWidth, int hcHeight, CXStats cx, ArithmDecoder arithmeticDecoder) {
+			internal void SetParams(int sdTemplate, short[] sdATX, short[] sdATY, 
+					int symWidth, int hcHeight, CXStats cx, ArithmDecoder arithDecoder) {
 				this.isTPGDon = this.isMMR = false;
 				this.gbTemplate = sdTemplate;
 				this.gbAtX = sdATX;
@@ -4109,11 +3855,11 @@ namespace XPdf {
 				this.regInfo.width = symWidth;
 				this.regInfo.height = hcHeight;
 				this.cx = cx ?? this.cx;
-				this.arithDecoder = arithmeticDecoder ?? this.arithDecoder;
+				this.arithDecoder = arithDecoder ?? this.arithDecoder;
 				this.mmrDecompressor = null;
 				this.regBmp = null;
 			}
-			internal void setParameters(SegmentData seg, bool mmr, int gbh, int gbw, int gbTemplate, short[] gbAtX, short[] gbAtY) {
+			internal void SetParams(SegmentData seg, bool mmr, int gbh, int gbw, int gbTemplate, short[] gbAtX, short[] gbAtY) {
 				this.dataOffset = seg.dataOffset;
 				this.dataLength = seg.dataLength;
 				this.isMMR = mmr;
@@ -4123,125 +3869,115 @@ namespace XPdf {
 				this.gbAtX = gbAtX;
 				this.gbAtY = gbAtY;
 			}
-			internal override void init(SegmentHeader header, ImgStream sis) {
-				base.init(header, sis);
-				imgStrm.readBits(3); // Dirty read...
-				useExtTemplates = (imgStrm.readBits(1) == 1);       /* Bit 4 */
-				isTPGDon = (imgStrm.readBits(1) == 1);              /* Bit 3 */
-				gbTemplate = (byte)(imgStrm.readBits(2) & 0xf);     /* Bit 1-2 */
-				isMMR = (imgStrm.readBits(1) == 1);          /* Bit 0 */
+			internal override void Init(SegmentHeader header, ImgStream sis) {
+				base.Init(header, sis);
+				int flags = imgStrm.ReadByte();
+				useExtTemplates = (flags & 0x10) != 0;      /* Bit 4 */
+				isTPGDon		= (flags & 0x08) != 0;      /* Bit 3 */
+				gbTemplate		= (flags >> 1) & 3;			/* Bit 1-2 */
+				isMMR			= (flags & 1) != 0;         /* Bit 0 */
 				if (!isMMR) {
 					int amtOfGbAt = (gbTemplate == 0) ? (useExtTemplates ? 12 : 4) : 1;
 					(gbAtX, gbAtY) = (new short[amtOfGbAt], new short[amtOfGbAt]);
-					for (int i = 0; i < amtOfGbAt; i++) {
-						gbAtX[i] = imgStrm.readSByte();
-						gbAtY[i] = imgStrm.readSByte();
-					}
+					for (int i = 0; i < amtOfGbAt; i++) 
+						(gbAtX[i], gbAtY[i]) = (imgStrm.ReadSByte(), imgStrm.ReadSByte());
 				}
-				dataOffset = imgStrm.Position;        /* Segment data structure */
-				dataLength = imgStrm.Length - dataOffset;
+				dataLength = imgStrm.Length - (dataOffset = imgStrm.Position);
 			}
 		}
 		internal class JBIG2Page {
 			internal Dictionary<int, SegmentHeader> segments = new Dictionary<int, SegmentHeader>();
-			JB2Bmp pgBmp;
-			int pageNumber;
+			JB2Bmp	pgBmp;
+			int		pageNumber;
 			PBoxJBig2 document;
 			internal JBIG2Page(PBoxJBig2 document, int pageNumber) {
 				this.document = document;
 				this.pageNumber = pageNumber;
 			}
-			internal SegmentHeader getSegment(int number) {
+			internal SegmentHeader GetSegment(int number) {
 				if (segments.ContainsKey(number))
 					return segments[number];
-				return document?.getGlobalSegment(number);
+				return document?.GetGlobalSegment(number);
 			}
-			internal JB2Bmp getBitmap() {
+			internal JB2Bmp GetBitmap() {
 				HashSet<int> regTypes = new HashSet<int> { 6, 7, 22, 23, 38, 39, 42, 43 };
 				if (null != pgBmp || pageNumber < 1)
 					return pgBmp;
-				PageInformation pi = (PageInformation)segments.Values
-											.FirstOrDefault(s => s.segType == 48).getSegData();
+				PageInformation pi = (PageInformation)segments
+							.Values.FirstOrDefault(s => s.segType == 48).GetSegData();
 				if (!pi.isStriped || pi.height != -1) {
-					pgBmp = new JB2Bmp(pi.width, pi.height);
-					if (pi.defPix != 0)
-						pgBmp.fillBitmap(0xff);
+					pgBmp = new JB2Bmp(pi.width, pi.height, pi.defPix);
 					foreach (SegmentHeader s in segments.Values)
 						if (regTypes.Contains(s.segType)) {
-							Region r = (Region)s.getSegData();
-							JB2Bmp bmp = r.getRegBmp();
+							Region r = (Region)s.GetSegData();
+							JB2Bmp bmp = r.GetRegBmp();
 							if (segments.Values.Where(x => regTypes.Contains(x.segType)).Count() == 1
-							&& pi.defPix == 0 && pi.width == bmp.width && pi.height == bmp.height)
+							&& !pi.defPix && pi.width == bmp.width && pi.height == bmp.height)
 								pgBmp = bmp;
 							else {
 								RegSegInfo ri = r.regInfo;
-								bmp.blit(pgBmp, ri.xLoc, ri.yLoc, getComboOper(pi, ri.getComboOper()));
+								bmp.blit(pgBmp, ri.xLoc, ri.yLoc, pi.GetComboOper(ri));
 							}
 						}
 				}
 				else {
-					int finalHeight = segments.Values.Where(x => x.segType == 50)
-						.Select(x => ((EndOfStripe)x.getSegData()).lineNum + 1).Last(), startLine = 0;
-					pgBmp = new JB2Bmp(pi.width, finalHeight);
+					int line1 = 0, lineN = segments.Values.Where(x => x.segType == 50)
+								.Select(x => ((EndOfStripe)x.GetSegData()).lineNum + 1).Last();
+					pgBmp = new JB2Bmp(pi.width, lineN);
 					foreach (SegmentHeader s in segments.Values)
 						if (s.segType == 50) 
-							startLine = ((EndOfStripe)s.getSegData()).lineNum + 1;
+							line1 = ((EndOfStripe)s.GetSegData()).lineNum + 1;
 						else if (regTypes.Contains(s.segType)) {
-							Region r = (Region)s.getSegData();
+							Region r = (Region)s.GetSegData();
 							RegSegInfo ri = r.regInfo;
-							r.getRegBmp().blit(pgBmp, ri.xLoc, startLine, getComboOper(pi, ri.getComboOper()));
+							r.GetRegBmp().blit(pgBmp, ri.xLoc, line1, pi.GetComboOper(ri));
 						}
 				}
 				segments = null;                // allow GC
 				return pgBmp;
 			}
-			ComboOper getComboOper(PageInformation pi, ComboOper newOperator) {
-				return pi.isComboOperOverrideAllow() ? newOperator : pi.getComboOper();
-			}
 		}
 		Dictionary<int, JBIG2Page> pages = new Dictionary<int, JBIG2Page>();
-		internal Dictionary<int, SegmentHeader> globalSegments = new Dictionary<int, SegmentHeader>();
-		internal SegmentHeader getGlobalSegment(int segmentNr) {
-			return globalSegments?[segmentNr];
+		internal Dictionary<int, SegmentHeader> globSegs = new Dictionary<int, SegmentHeader>();
+		internal SegmentHeader GetGlobalSegment(int segmentNr) {
+			return globSegs?[segmentNr];
 		}
-		internal JBIG2Page getPage(int pageNumber) {
+		internal JBIG2Page GetPage(int pageNumber) {
 			return pages.ContainsKey(pageNumber) ? pages[pageNumber] : null;
 		}
-		private void mapStream() {
-			List<SegmentHeader> segments = new List<SegmentHeader>();
+		void MapStream() {
+			List<SegmentHeader> segs = new List<SegmentHeader>();
 			long offset = 0;
 			bool typeRand = false;
-			bufStr.Seek(0);
+			bufStr.Seek(0, SeekOrigin.Begin);
 			int[] sig = { 0x97, 0x4A, 0x42, 0x32, 0x0D, 0x0A, 0x1A, 0x0A };
 			if (sig.All(x => x == bufStr.ReadByte())) {
-				bufStr.readBits(5);                         /* D.4.2 Header flag (1 byte) */
-				bufStr.readBits(1);                         // Bit 2 - Indicates if extended templates are used
-				bool fPgNums = (bufStr.readBits(1) == 1);   // numPagesKnown 
-				typeRand = 0 == bufStr.readBits(1);         // Bit 0 - Indicates file organisation type
-				if (!fPgNums)                                // D.4.3 Number of pages (field is only present 
-					bufStr.readInt();                       // if amount of pages are 'NOT unknown')
+				int flags = bufStr.ReadByte();
+				bool fPgNums = (flags & 2) != 0;		// numPagesKnown 
+				typeRand = 0 == (flags & 1);			// Bit 0 - Indicates file organisation type
+				if (!fPgNums)                           // D.4.3 Number of pages (field is only present 
+					bufStr.ReadInt();                   // if amount of pages are 'NOT unknown')
 				offset = bufStr.Position;
 			}
-			if (globalSegments == null)
-				globalSegments = new Dictionary<int, SegmentHeader>();
-			for (int segmentType = 0; segmentType != 51 && !bufStr.EOF(4); bufStr.Seek(offset)) {
+			globSegs = globSegs ?? new Dictionary<int, SegmentHeader>();
+			for (int segmentType = 0; segmentType != 51 && !bufStr.EOF(4); bufStr.Seek(offset, SeekOrigin.Begin)) {
 				SegmentHeader segment = new SegmentHeader(this, bufStr, offset);
 				segmentType = segment.segType;
 				if (segment.pgAssoc != 0) {
-					JBIG2Page page = getPage(segment.pgAssoc);
+					JBIG2Page page = GetPage(segment.pgAssoc);
 					if (page == null)
 						pages[segment.pgAssoc] = page = new JBIG2Page(this, segment.pgAssoc);
 					page.segments[segment.segNo] = segment;
 				}
 				else
-					globalSegments[segment.segNo] = segment;
-				segments.Add(segment);
+					globSegs[segment.segNo] = segment;
+				segs.Add(segment);
 				offset = bufStr.Position;
 				if (!typeRand)
 					offset += segment.DataLen;
 			}
 			if (typeRand)                                           // Random: Data part starts after all the headers
-				foreach (SegmentHeader s in segments) {
+				foreach (SegmentHeader s in segs) {
 					s.DataStart = offset;
 					offset += s.DataLen;
 				}
@@ -4251,11 +3987,11 @@ namespace XPdf {
 				throw new Exception("imageInputStream must not be null");
 			bufStr = new ImgStream(input);
 			if (glob != null)
-				globalSegments = new PBoxJBig2(glob).globalSegments;
-			mapStream();
+				globSegs = new PBoxJBig2(glob).globSegs;
+			MapStream();
 		}
 		public Image decodeImage() {
-			return getPage(1).getBitmap().ToImage();
+			return GetPage(1).GetBitmap().ToImage();
 		}
 	}
 }
