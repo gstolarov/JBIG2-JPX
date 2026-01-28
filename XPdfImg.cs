@@ -173,12 +173,11 @@ namespace XPdf {
 		uint ReadByte() {
 			if (limitStream) {
 				if (readBuf >= 0) {
-					uint x = (uint)readBuf;
+					uint x = (uint)readBuf;	
 					readBuf = -1;
 					return x;
 				}
-				--dataLen;
-				if (dataLen < 0)
+				if (--dataLen < 0)
 					return 0xff;
 			}
 			return (uint)str.ReadByte() & 0xff;
@@ -266,34 +265,6 @@ namespace XPdf {
 		}
 	}
 	public class XPdfJpx : XPdfStream {
-		class ArrayPtr<T> {
-			internal T[] data;
-			internal int off;
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal ArrayPtr(T[] b = null, int o = 0) { data = b; off = o; }
-			internal ArrayPtr(ArrayPtr<T> v) { data = v.data; off = v.off; }
-			internal T this[int i] {
-				[MethodImpl(MethodImplOptions.AggressiveInlining)]
-				get { return data[off + i]; }
-				[MethodImpl(MethodImplOptions.AggressiveInlining)]
-				set { data[off + i] = value; }
-			}
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static ArrayPtr<T> operator +(ArrayPtr<T> v, int i) {
-				return new ArrayPtr<T>(v.data, v.off + i);
-			}
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public void set(ArrayPtr<T> v, int i = 0) {
-				data = v.data; off = v.off + i;
-			}
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal void inc(int i) { off += i; }
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static ArrayPtr<T> operator ++(ArrayPtr<T> v) {
-				v.off++; return v;
-			}
-
-		};
 		class JPXPalette {
 			internal int nEntries;          // number of entries in the palette
 			internal int nComps;           // number of components in each entry
@@ -301,30 +272,31 @@ namespace XPdf {
 			internal int[] c = null;        // color data: c[i*nComps+j] = entry i, component j
 		};
 		class JPXTagTreeNode {
-			internal bool finished = false;     // true if this node is finished
-			internal int val = 0;              // current value
+			internal bool	finished = false;   // true if this node is finished
+			internal int	val = 0;            // current value
 		};
 		class JPXCodeBlock {                    //----- size
 			internal int x0, y0, x1, y1;        // bounds
 			internal bool seen = false;         // true if this code-block has already been seen
 			internal int lBlock;                // base number of bits used for pkt data length
 			internal int nextPass;              // next coding pass
-			internal int nZeroBitPlanes;        // number of zero bit planes
+			internal int nBitPlanes0;			// number of zero bit planes
 			internal int included;              // code-block inclusion in this packet: 0=not included, 1=included
 			internal int nCodingPasses;         // number of coding passes in this pkt
 			internal int[] dataLen = null;      // data lengths (one per codeword segment)
 												//----- coefficient data
-			internal ArrayPtr<int> coeffs;
-			internal ArrayPtr<bool> touched = null;// coefficient 'touched' flags
-			internal int len;                 // coefficient length
+			internal int[]	coeffs;
+			internal int	coefOff;
+			internal bool[] touched = null;		// coefficient 'touched' flags
+			internal int	len;				// coefficient length
 			internal ArithmDecoder arithDecoder = null;// arithmetic decoder
-			internal CXStats stats = null;  // arithmetic decoder stats
+			internal CXStats stats = null;		// arithmetic decoder stats
 		};
 		class JPXSubband {
 			internal int nXCBs, nYCBs;              // number of code-blocks in the x and y directions
 			internal int maxTTLevel;                // max tag tree level
 			internal JPXTagTreeNode[] inclusion;    // inclusion tag tree for each subband
-			internal JPXTagTreeNode[] zeroBitPlane; // zero-bit plane tag tree for each subband
+			internal JPXTagTreeNode[] BitPlane0;	// zero-bit plane tag tree for each subband
 			internal JPXCodeBlock[] cbs;            //----- children the code-blocks (len = nXCBs * nYCBs)
 		};
 		class JPXPrecinct {
@@ -413,32 +385,30 @@ namespace XPdf {
 		class JPXTile {
 			internal bool init = false;
 			//----- from the COD segments (main and tile)
-			internal int progOrder;        // progression order
-			internal int nLayers;          // number of layers
-			internal int multiComp;        // multiple component transformation
-
+			internal int progOrder;				// progression order
+			internal int nLayers;				// number of layers
+			internal int multiComp;				// multiple component transformation
 			//----- computed
-			internal int x0, y0, x1, y1;       // bounds of the tile, in ref coords
-			internal int maxNDecompLevels;      // max number of decomposition levels used in any component in this tile
-			internal int maxNPrecincts;         // max number of precints in any component/res level in this tile
-
+			internal int x0, y0, x1, y1;		// bounds of the tile, in ref coords
+			internal int maxNDecompLvls;		// max number of decomposition levels used in any component in this tile
+			internal int maxNPrecincts;			// max number of precints in any component/res level in this tile
 			//----- progression order loop counters
-			internal int comp;         // component
-			internal int res;          // resolution level
-			internal int precinct;     // precinct
-			internal int layer;            // layer
-			internal bool done;         // set when this tile is done
-			internal int nextTilePart = 0;     // next expected tile-part
+			internal int comp;					// component
+			internal int res;					// resolution level
+			internal int precinct;				// precinct
+			internal int layer;					// layer
+			internal bool done;					// set when this tile is done
+			internal int nextTilePart = 0;		// next expected tile-part
 			internal JPXTileComp[] tileComps = null;// the tile-components (len = JPXImage.nComps)
 		};
-		class JPXImage {                            //----- from the SIZ segment
-			internal int xSize,		ySize;          // size of reference grid
-			internal int xOffset,	yOffset;        // image offset
-			internal int xTileSize, yTileSize;      // size of tiles
-			internal int xTileOff,	yTileOff;		// offset of first tile
-			internal int nXTiles,	nYTiles;        // number of tiles in x/y direction
-			internal int nComps;                    // number of components
-			internal JPXTile[] tiles = null;        // the tiles (len = nXTiles * nYTiles)
+		class JPXImage {                        //----- from the SIZ segment
+			internal int xSize,		ySize;      // size of reference grid
+			internal int xOffset,	yOffset;    // image offset
+			internal int xTileSize, yTileSize;  // size of tiles
+			internal int xTileOff,	yTileOff;	// offset of first tile
+			internal int nXTiles,	nYTiles;    // number of tiles in x/y direction
+			internal int nComps;                // number of components
+			internal JPXTile[] tiles = null;    // the tiles (len = nXTiles * nYTiles)
 		};
 
 		const int jpxNContexts = 19, jpxContextSigProp = 0, jpxContextRunLength = 17, jpxContextUniform = 18;
@@ -496,11 +466,12 @@ namespace XPdf {
 				Array.Clear(buf, 0, buf.Length);
 				for (int curX = img.xOffset; curX < img.xSize; curX++) {
 					var tile = img.tiles[((curY - img.yTileOff) / img.yTileSize * img.nXTiles
-											+ (curX - img.xTileOff) / img.xTileSize)];
+										+ (curX - img.xTileOff) / img.xTileSize)];
+					JPXTileComp tileComp = tile.tileComps[0];
+					int idx = Math.Max(0, curY / tileComp.vSep - tileComp.y0) * tileComp.w
+							+ Math.Max(0, curX / tileComp.hSep - tileComp.x0);
 					for (int curComp = 0; curComp < nComps; curComp++) {
-						JPXTileComp tileComp = tile.tileComps[havePalette ? 0 : curComp];
-						int pix = tileComp.data[Math.Max(0, curY / tileComp.vSep - tileComp.y0) * tileComp.w
-											  + Math.Max(0, curX / tileComp.hSep - tileComp.x0)];
+						int pix = tile.tileComps[havePalette ? 0 : curComp].data[idx];
 						if (havePalette)
 							pix = (pix >= 0 && pix < palette.nEntries)
 								? palette.c[pix * palette.nComps + curComp] : 0;
@@ -829,12 +800,12 @@ namespace XPdf {
 				tile.x1 = Math.Min(img.xSize, img.xTileOff + (j + 1) * img.xTileSize);
 				tile.y1 = Math.Min(img.ySize, img.yTileOff + (i + 1) * img.yTileSize);
 				tile.done = false;
-				tile.maxNDecompLevels = tile.maxNPrecincts = tile.comp
+				tile.maxNDecompLvls = tile.maxNPrecincts = tile.comp
 						= tile.res = tile.precinct = tile.layer = 0;
 				for (comp = 0; comp < img.nComps; ++comp) {
 					JPXTileComp tileComp = tile.tileComps[comp];
-					if (tileComp.nDecompLevels > tile.maxNDecompLevels)
-						tile.maxNDecompLevels = tileComp.nDecompLevels;
+					if (tileComp.nDecompLevels > tile.maxNDecompLvls)
+						tile.maxNDecompLvls = tileComp.nDecompLevels;
 					tileComp.x0 = jpxCeilDiv(tile.x0, tileComp.hSep);
 					tileComp.y0 = jpxCeilDiv(tile.y0, tileComp.vSep);
 					tileComp.x1 = jpxCeilDiv(tile.x1, tileComp.hSep);
@@ -847,84 +818,84 @@ namespace XPdf {
 					n = Math.Max(tileComp.x1 - tileComp.x0, tileComp.y1 - tileComp.y0);
 					tileComp.buf = new int[n + 8];
 					for (r = 0; r <= tileComp.nDecompLevels; ++r) {
-						JPXResLevel resLevel = tileComp.resLevels[r];
-						resLevel.x0 = jpxCeilDivPow2(tileComp.x0, tileComp.nDecompLevels - r);
-						resLevel.y0 = jpxCeilDivPow2(tileComp.y0, tileComp.nDecompLevels - r);
-						resLevel.x1 = jpxCeilDivPow2(tileComp.x1, tileComp.nDecompLevels - r);
-						resLevel.y1 = jpxCeilDivPow2(tileComp.y1, tileComp.nDecompLevels - r);
-						resLevel.codeBlockW = Math.Min(resLevel.precinctWidth - (r == 0 ? 0 : 1), tileComp.codeBlockW);
-						resLevel.codeBlockH = Math.Min(resLevel.precinctHeight - (r == 0 ? 0 : 1), tileComp.codeBlockH);
-						resLevel.cbW = 1 << resLevel.codeBlockW;
-						resLevel.cbH = 1 << resLevel.codeBlockH;
+						JPXResLevel resLvl = tileComp.resLevels[r];
+						resLvl.x0 = jpxCeilDivPow2(tileComp.x0, tileComp.nDecompLevels - r);
+						resLvl.y0 = jpxCeilDivPow2(tileComp.y0, tileComp.nDecompLevels - r);
+						resLvl.x1 = jpxCeilDivPow2(tileComp.x1, tileComp.nDecompLevels - r);
+						resLvl.y1 = jpxCeilDivPow2(tileComp.y1, tileComp.nDecompLevels - r);
+						resLvl.codeBlockW = Math.Min(resLvl.precinctWidth - (r == 0 ? 0 : 1), tileComp.codeBlockW);
+						resLvl.codeBlockH = Math.Min(resLvl.precinctHeight - (r == 0 ? 0 : 1), tileComp.codeBlockH);
+						resLvl.cbW = 1 << resLvl.codeBlockW;
+						resLvl.cbH = 1 << resLvl.codeBlockH;
 						// the JPEG 2000 spec says that packets for empty res levels
 						// should all be present in the codestream (B.6, B.9, B.10),
 						// but it appears that encoders drop packets if the res level
 						// AND the subbands are all completely empty
-						resLevel.empty = resLevel.x0 == resLevel.x1 || resLevel.y0 == resLevel.y1;
+						resLvl.empty = resLvl.x0 == resLvl.x1 || resLvl.y0 == resLvl.y1;
 						if (r == 0) {
 							nSBs = 1;
-							(resLevel.bx0[0], resLevel.by0[0]) = (resLevel.x0, resLevel.y0);
-							(resLevel.bx1[0], resLevel.by1[0]) = (resLevel.x1, resLevel.y1);
-							resLevel.empty = resLevel.empty
-								&& (resLevel.bx0[0] == resLevel.bx1[0] || resLevel.by0[0] == resLevel.by1[0]);
+							(resLvl.bx0[0], resLvl.by0[0]) = (resLvl.x0, resLvl.y0);
+							(resLvl.bx1[0], resLvl.by1[0]) = (resLvl.x1, resLvl.y1);
+							resLvl.empty = resLvl.empty
+								&& (resLvl.bx0[0] == resLvl.bx1[0] || resLvl.by0[0] == resLvl.by1[0]);
 						}
 						else {
 							nSBs = 3;
-							resLevel.bx0[0] = jpxCeilDivPow2(resLevel.x0 - 1, 1);
-							resLevel.by0[0] = jpxCeilDivPow2(resLevel.y0, 1);
-							resLevel.bx1[0] = jpxCeilDivPow2(resLevel.x1 - 1, 1);
-							resLevel.by1[0] = jpxCeilDivPow2(resLevel.y1, 1);
-							resLevel.bx0[1] = jpxCeilDivPow2(resLevel.x0, 1);
-							resLevel.by0[1] = jpxCeilDivPow2(resLevel.y0 - 1, 1);
-							resLevel.bx1[1] = jpxCeilDivPow2(resLevel.x1, 1);
-							resLevel.by1[1] = jpxCeilDivPow2(resLevel.y1 - 1, 1);
-							resLevel.bx0[2] = jpxCeilDivPow2(resLevel.x0 - 1, 1);
-							resLevel.by0[2] = jpxCeilDivPow2(resLevel.y0 - 1, 1);
-							resLevel.bx1[2] = jpxCeilDivPow2(resLevel.x1 - 1, 1);
-							resLevel.by1[2] = jpxCeilDivPow2(resLevel.y1 - 1, 1);
-							resLevel.empty = resLevel.empty
-								&& (resLevel.bx0[0] == resLevel.bx1[0] || resLevel.by0[0] == resLevel.by1[0])
-								&& (resLevel.bx0[1] == resLevel.bx1[1] || resLevel.by0[1] == resLevel.by1[1])
-								&& (resLevel.bx0[2] == resLevel.bx1[2] || resLevel.by0[2] == resLevel.by1[2]);
+							resLvl.bx0[0] = jpxCeilDivPow2(resLvl.x0 - 1, 1);
+							resLvl.by0[0] = jpxCeilDivPow2(resLvl.y0, 1);
+							resLvl.bx1[0] = jpxCeilDivPow2(resLvl.x1 - 1, 1);
+							resLvl.by1[0] = jpxCeilDivPow2(resLvl.y1, 1);
+							resLvl.bx0[1] = jpxCeilDivPow2(resLvl.x0, 1);
+							resLvl.by0[1] = jpxCeilDivPow2(resLvl.y0 - 1, 1);
+							resLvl.bx1[1] = jpxCeilDivPow2(resLvl.x1, 1);
+							resLvl.by1[1] = jpxCeilDivPow2(resLvl.y1 - 1, 1);
+							resLvl.bx0[2] = jpxCeilDivPow2(resLvl.x0 - 1, 1);
+							resLvl.by0[2] = jpxCeilDivPow2(resLvl.y0 - 1, 1);
+							resLvl.bx1[2] = jpxCeilDivPow2(resLvl.x1 - 1, 1);
+							resLvl.by1[2] = jpxCeilDivPow2(resLvl.y1 - 1, 1);
+							resLvl.empty = resLvl.empty
+								&& (resLvl.bx0[0] == resLvl.bx1[0] || resLvl.by0[0] == resLvl.by1[0])
+								&& (resLvl.bx0[1] == resLvl.bx1[1] || resLvl.by0[1] == resLvl.by1[1])
+								&& (resLvl.bx0[2] == resLvl.bx1[2] || resLvl.by0[2] == resLvl.by1[2]);
 						}
-						preCol0 = jpxFloorDivPow2(resLevel.x0, resLevel.precinctWidth);
-						preCol1 = jpxCeilDivPow2(resLevel.x1, resLevel.precinctWidth);
-						preRow0 = jpxFloorDivPow2(resLevel.y0, resLevel.precinctHeight);
-						preRow1 = jpxCeilDivPow2(resLevel.y1, resLevel.precinctHeight);
+						preCol0 = jpxFloorDivPow2(resLvl.x0, resLvl.precinctWidth);
+						preCol1 = jpxCeilDivPow2(resLvl.x1, resLvl.precinctWidth);
+						preRow0 = jpxFloorDivPow2(resLvl.y0, resLvl.precinctHeight);
+						preRow1 = jpxCeilDivPow2(resLvl.y1, resLvl.precinctHeight);
 						int nPrecincts = (preCol1 - preCol0) * (preRow1 - preRow0);
-						resLevel.precincts = Alloc<JPXPrecinct>(nPrecincts);
+						resLvl.precincts = Alloc<JPXPrecinct>(nPrecincts);
 						tile.maxNPrecincts = Math.Max(tile.maxNPrecincts, nPrecincts);
 						int pIdx = 0;
 						for (preRow = preRow0; preRow < preRow1; ++preRow) {
 							for (preCol = preCol0; preCol < preCol1; ++preCol, ++pIdx) {
-								JPXPrecinct precinct = resLevel.precincts[pIdx];
+								JPXPrecinct precinct = resLvl.precincts[pIdx];
 								precinct.subbands = Alloc<JPXSubband>(nSBs);
 								for (sb = 0; sb < nSBs; ++sb) {
 									precinct.subbands[sb].inclusion = null;
-									precinct.subbands[sb].zeroBitPlane = null;
+									precinct.subbands[sb].BitPlane0 = null;
 									precinct.subbands[sb].cbs = null;
 								}
 								for (sb = 0; sb < nSBs; ++sb) {
 									JPXSubband subband = precinct.subbands[sb];
 									int off = (r == 0) ? 0 : 1;
-									int px0 = Math.Max(resLevel.bx0[sb], preCol << (resLevel.precinctWidth - off));
-									int px1 = Math.Min(resLevel.bx1[sb], (preCol + 1) << (resLevel.precinctWidth - off));
-									int py0 = Math.Max(resLevel.by0[sb], preRow << (resLevel.precinctHeight - off));
-									int py1 = Math.Min(resLevel.by1[sb], (preRow + 1) << (resLevel.precinctHeight - off));
+									int px0 = Math.Max(resLvl.bx0[sb], preCol << (resLvl.precinctWidth - off));
+									int px1 = Math.Min(resLvl.bx1[sb], (preCol + 1) << (resLvl.precinctWidth - off));
+									int py0 = Math.Max(resLvl.by0[sb], preRow << (resLvl.precinctHeight - off));
+									int py1 = Math.Min(resLvl.by1[sb], (preRow + 1) << (resLvl.precinctHeight - off));
 									int sbCoeffs;
 									if (r == 0)  // (NL)LL
 										sbCoeffs = 0;
 									else if (sb == 0)  // (NL-r+1)HL
-										sbCoeffs = resLevel.bx1[1] - resLevel.bx0[1];
+										sbCoeffs = resLvl.bx1[1] - resLvl.bx0[1];
 									else if (sb == 1)  // (NL-r+1)LH
-										sbCoeffs = ((resLevel.by1[0] - resLevel.by0[0]) * tileComp.w);
+										sbCoeffs = ((resLvl.by1[0] - resLvl.by0[0]) * tileComp.w);
 									else  // (NL-r+1)HH
-										sbCoeffs = ((resLevel.by1[0] - resLevel.by0[0]) * tileComp.w
-												  + (resLevel.bx1[1] - resLevel.bx0[1]));
-									int cbCol0 = jpxFloorDivPow2(px0, resLevel.codeBlockW);
-									int cbCol1 = jpxCeilDivPow2(px1,  resLevel.codeBlockW);
-									int cbRow0 = jpxFloorDivPow2(py0, resLevel.codeBlockH);
-									int cbRow1 = jpxCeilDivPow2(py1,  resLevel.codeBlockH);
+										sbCoeffs = ((resLvl.by1[0] - resLvl.by0[0]) * tileComp.w
+												  + (resLvl.bx1[1] - resLvl.bx0[1]));
+									int cbCol0 = jpxFloorDivPow2(px0, resLvl.codeBlockW);
+									int cbCol1 = jpxCeilDivPow2(px1,  resLvl.codeBlockW);
+									int cbRow0 = jpxFloorDivPow2(py0, resLvl.codeBlockH);
+									int cbRow1 = jpxCeilDivPow2(py1,  resLvl.codeBlockH);
 									subband.nXCBs = cbCol1 - cbCol0;
 									subband.nYCBs = cbRow1 - cbRow0;
 									n = Math.Max(subband.nXCBs, subband.nYCBs);
@@ -936,23 +907,23 @@ namespace XPdf {
 										n += nx * ny;
 									}
 									subband.inclusion = Alloc<JPXTagTreeNode>(n);
-									subband.zeroBitPlane = Alloc<JPXTagTreeNode>(n);
+									subband.BitPlane0 = Alloc<JPXTagTreeNode>(n);
 									subband.cbs = Alloc<JPXCodeBlock>((subband.nXCBs * subband.nYCBs));
 									int cbi = 0;
 									for (cbY = cbRow0; cbY < cbRow1; ++cbY) {
 										for (cbX = cbCol0; cbX < cbCol1; ++cbX, ++cbi) {
 											var cb = subband.cbs[cbi];
-											cb.x0 = Math.Max(px0, cbX << resLevel.codeBlockW);
-											cb.y0 = Math.Max(py0, cbY << resLevel.codeBlockH);
-											cb.x1 = Math.Min(px1, cb.x0 + resLevel.cbW);
-											cb.y1 = Math.Min(py1, cb.y0 + resLevel.cbH);
-											(cb.seen, cb.lBlock, cb.nextPass, cb.nZeroBitPlanes, cb.dataLen)
+											cb.x0 = Math.Max(px0, cbX << resLvl.codeBlockW);
+											cb.y0 = Math.Max(py0, cbY << resLvl.codeBlockH);
+											cb.x1 = Math.Min(px1, cb.x0 + resLvl.cbW);
+											cb.y1 = Math.Min(py1, cb.y0 + resLvl.cbH);
+											(cb.seen, cb.lBlock, cb.nextPass, cb.nBitPlanes0, cb.dataLen)
 												= (false, 3, jpxPassCleanup, 0, new int[1]);
 											if (r <= tileComp.nDecompLevels) {
-												cb.coeffs = new ArrayPtr<int>(tileComp.data, (sbCoeffs + (cb.x0 - resLevel.bx0[sb])
-																						  + tileComp.w * (cb.y0 - resLevel.by0[sb])));
-												cb.touched = new ArrayPtr<bool>(new bool[1 << (resLevel.codeBlockW + resLevel.codeBlockH)]);
-												Array.Clear(cb.touched.data, 0, cb.touched.data.Length);
+												cb.coeffs = tileComp.data;
+												cb.coefOff = sbCoeffs + (cb.x0 - resLvl.bx0[sb])
+														 + tileComp.w * (cb.y0 - resLvl.by0[sb]);
+												cb.touched = new bool[1 << (resLvl.codeBlockW + resLvl.codeBlockH)];
 											}
 											else
 												(cb.coeffs, cb.touched) = (null, null);
@@ -1039,21 +1010,21 @@ namespace XPdf {
 											nx = jpxCeilDivPow2(subband.nXCBs, level);
 											ny = jpxCeilDivPow2(subband.nYCBs, level);
 											j = i + (cbY >> level) * nx + (cbX >> level);
-											if (!subband.zeroBitPlane[j].finished && 0 == subband.zeroBitPlane[j].val)
-												subband.zeroBitPlane[j].val = ttVal;
+											if (!subband.BitPlane0[j].finished && 0 == subband.BitPlane0[j].val)
+												subband.BitPlane0[j].val = ttVal;
 											else
-												ttVal = subband.zeroBitPlane[j].val;
-											while (!subband.zeroBitPlane[j].finished) {
+												ttVal = subband.BitPlane0[j].val;
+											while (!subband.BitPlane0[j].finished) {
 												if (!ReadBits(1, ref bits))
 													Error("Error in JPX stream");
 												if (bits == 1)
-													subband.zeroBitPlane[j].finished = true;
+													subband.BitPlane0[j].finished = true;
 												else
 													++ttVal;
 											}
-											subband.zeroBitPlane[j].val = ttVal;
+											subband.BitPlane0[j].val = ttVal;
 										}
-										cb.nZeroBitPlanes = ttVal;
+										cb.nBitPlanes0 = ttVal;
 									}
 									if (!ReadBits(1, ref bits)) // number of coding passes
 										Error("Error in JPX stream");
@@ -1115,18 +1086,18 @@ namespace XPdf {
 				do {
 					if (tile.progOrder == 0) // layer, resolution level, component, precinct
 						tile.done = nextTile(ref tile.precinct, tile.maxNPrecincts, ref tile.comp, img.nComps,
-								ref tile.res, tile.maxNDecompLevels + 1, ref tile.layer, tile.nLayers);
+								ref tile.res, tile.maxNDecompLvls + 1, ref tile.layer, tile.nLayers);
 					else if (tile.progOrder == 1) // resolution level, layer, component, precinct
 						tile.done = nextTile(ref tile.precinct, tile.maxNPrecincts, ref tile.comp, img.nComps,
-								ref tile.layer, tile.nLayers, ref tile.res, tile.maxNDecompLevels + 1);
+								ref tile.layer, tile.nLayers, ref tile.res, tile.maxNDecompLvls + 1);
 					else if (tile.progOrder == 2) // resolution level, precinct, component, layer - incorrect if there are subsampled components (?)
 						tile.done = nextTile(ref tile.layer, tile.nLayers, ref tile.comp, img.nComps,
 								ref tile.precinct, tile.maxNPrecincts, ref tile.res, tile.maxNPrecincts + 1);
 					else if (tile.progOrder == 3) // precinct, component, resolution level, layer - incorrect if there are subsampled components (?)
-						tile.done = nextTile(ref tile.layer, tile.nLayers, ref tile.res, tile.maxNDecompLevels + 1,
+						tile.done = nextTile(ref tile.layer, tile.nLayers, ref tile.res, tile.maxNDecompLvls + 1,
 								ref tile.comp, img.nComps, ref tile.precinct, tile.maxNPrecincts);
 					else if (tile.progOrder == 4) // component, precinct, resolution level, layer
-						tile.done = nextTile(ref tile.layer, tile.nLayers, ref tile.res, tile.maxNDecompLevels + 1,
+						tile.done = nextTile(ref tile.layer, tile.nLayers, ref tile.res, tile.maxNDecompLvls + 1,
 								ref tile.precinct, tile.maxNPrecincts, ref tile.comp, img.nComps);
 				} while (!tile.done && (tile.res > tile.tileComps[tile.comp].nDecompLevels
 								|| tile.precinct >= tile.tileComps[tile.comp].resLevels[tile.res].precincts.Length));
@@ -1178,9 +1149,9 @@ namespace XPdf {
 					cb.arithDecoder.Start();
 				}
 				switch (cb.nextPass) {
-					case jpxPassSigProp:	SignificancePropagationPass(tileComp, resLevel, res, sb, cb); break;
+					case jpxPassSigProp:	SignificancePropagationPass(tileComp, resLevel, res == 0 ? 1 : sb, cb); break;
 					case jpxPassMagRef:		MagnitudeRefinementPass(tileComp, resLevel, cb); break;
-					case jpxPassCleanup:	CleanupPass(tileComp, resLevel, res, sb, cb);	break;
+					case jpxPassCleanup:	CleanupPass(tileComp, resLevel, res == 0 ? 1 : sb, cb);	break;
 				}
 				if (0 != (tileComp.codeBlockStyle & 0x02)) {
 					cb.stats.Reset();
@@ -1194,92 +1165,85 @@ namespace XPdf {
 			cb.arithDecoder.Cleanup();
 		}
 
-		private static void CleanupPass(JPXTileComp tileComp, JPXResLevel resLevel, int res, int sb, JPXCodeBlock cb) {
-			ArrayPtr<int> coeff0 = new ArrayPtr<int>(), coeff1 = new ArrayPtr<int>(), coeff = new ArrayPtr<int>();
-			ArrayPtr<bool> touched0 = new ArrayPtr<bool>(), touched1 = new ArrayPtr<bool>(), touched = new ArrayPtr<bool>();
-			int x, y0, y1, cc;
-			for (y0 = cb.y0, coeff0.set(cb.coeffs), touched0.set(cb.touched); y0 < cb.y1;
-					y0 += 4, coeff0.off+=4*tileComp.w, touched0.off+=4<<resLevel.codeBlockW) {
-				for (x = cb.x0, coeff1.set(coeff0), touched1.set(touched0);
-					 x < cb.x1; ++x, ++coeff1, ++touched1) {
+		private static void CleanupPass(JPXTileComp tileComp, JPXResLevel resLvl, int res, JPXCodeBlock cb) {
+			int[] coeffd = cb.coeffs;
+			bool[] touchd = cb.touched;
+			int c0i, c1i, c2i, t0i, t1i, t2i, x, y0, y1, cc, tw=tileComp.w, cbw=resLvl.cbW;
+			for (y0 = cb.y0, c1i = cb.coefOff, t0i=0; y0 < cb.y1;
+					y0 += 4, c1i+=4*tw, t0i+=4<<resLvl.codeBlockW) {
+				for (x = cb.x0, c2i=c1i, t1i=t0i; x < cb.x1; ++x, ++c2i, ++t1i) {
 					y1 = 0;
 					bool cbs8 = 0==(tileComp.codeBlockStyle&0x08),
 						cx0 = x==cb.x0, cy0 = y0==cb.y0, cx1 = x==cb.x1-1, cy1 = y0+4==cb.y1;
 					if (y0 + 3 < cb.y1
-					&& !touched1.data[touched1.off]
-					&& !touched1.data[touched1.off+resLevel.cbW]
-					&& !touched1.data[touched1.off+resLevel.cbW*2]
-					&& !touched1.data[touched1.off+resLevel.cbW*3]
-					&& (	   cy0 || 0 == coeff1.data[coeff1.off-tileComp.w])
-					&& (cx0 || cy0 || 0 == coeff1.data[coeff1.off-tileComp.w-1])
-					&& (cx1 || cy0 || 0 == coeff1.data[coeff1.off-tileComp.w+1])
-					&& (cx0 || (0 == coeff1.data[coeff1.off-1]
-							 && 0 == coeff1.data[coeff1.off-1+tileComp.w]
-							 && 0 == coeff1.data[coeff1.off-1+tileComp.w*2]
-							 && 0 == coeff1.data[coeff1.off-1+tileComp.w*3]))
-					&& (cx1 || (0 == coeff1.data[coeff1.off+1]
-							 && 0 == coeff1.data[coeff1.off+1+tileComp.w]
-							 && 0 == coeff1.data[coeff1.off+1+tileComp.w*2]
-							 && 0 == coeff1.data[coeff1.off+1+tileComp.w*3]))
-					&& (!cbs8 || ((     cy1 || 0 == coeff1.data[coeff1.off+4*tileComp.w])
-							&& (cx0 || cy1 || 0 == coeff1.data[coeff1.off+4*tileComp.w-1])
-							&& (cx1 || cy1 || 0 == coeff1.data[coeff1.off+4*tileComp.w+1])))) {
+					&& !touchd[t1i]
+					&& !touchd[t1i+cbw]
+					&& !touchd[t1i+cbw*2]
+					&& !touchd[t1i+cbw*3]
+					&& (	   cy0 || 0 == coeffd[c2i-tw])
+					&& (cx0 || cy0 || 0 == coeffd[c2i-tw-1])
+					&& (cx1 || cy0 || 0 == coeffd[c2i-tw+1])
+					&& (cx0 || (0 == coeffd[c2i-1]
+							 && 0 == coeffd[c2i-1+tw]
+							 && 0 == coeffd[c2i-1+tw*2]
+							 && 0 == coeffd[c2i-1+tw*3]))
+					&& (cx1 || (0 == coeffd[c2i+1]
+							 && 0 == coeffd[c2i+1+tw]
+							 && 0 == coeffd[c2i+1+tw*2]
+							 && 0 == coeffd[c2i+1+tw*3]))
+					&& (!cbs8 || ((    cy1 || 0 == coeffd[c2i+4*tw])
+							&& (cx0 || cy1 || 0 == coeffd[c2i+4*tw-1])
+							&& (cx1 || cy1 || 0 == coeffd[c2i+4*tw+1])))) {
 						if (0 != cb.arithDecoder.DecodeBit(jpxContextRunLength, cb.stats)) {
 							y1 = cb.arithDecoder.DecodeBit(jpxContextUniform, cb.stats);
 							y1 = (y1 << 1) | cb.arithDecoder.DecodeBit(jpxContextUniform, cb.stats);
-							coeff.set(coeff1, (y1 * tileComp.w));
+							c0i = c2i + y1 * tw;
 							var sc = signContext[2][2];
-							coeff.data[coeff.off] 
+							coeffd[c0i] 
 								= (0 != (cb.arithDecoder.DecodeBit(sc[0],cb.stats)^sc[1])) ? -1 : 1;
 							++y1;
 						}
 						else
 							y1 = 4;
 					}
-					for (coeff.set(coeff1, (y1 * tileComp.w)),
-						touched.set(touched1, (y1 << resLevel.codeBlockW));
-							y1 < 4 && y0 + y1 < cb.y1;
-							++y1, coeff.off+=tileComp.w, touched.off+=resLevel.cbW) {
-						if (touched.data[touched.off]) {
-							touched.data[touched.off] = false;
+					for (c0i=c2i+y1*tw, t2i=t1i+(y1<<resLvl.codeBlockW);
+							y1 < 4 && y0 + y1 < cb.y1; ++y1, c0i+=tw, t2i+=cbw) {
+						if (touchd[t2i]) {
+							touchd[t2i] = false;
 							continue;
 						}
 						int horiz = 0, vert = 0, diag = 0, horizSign = 2, vertSign = 2;
+						bool chkNotFst = y0 + y1 > cb.y0,
+							chkNotLst = y0 + y1 < cb.y1 - 1 && (cbs8 || y1 < 3);
 						if (x > cb.x0) {
-							if (0 != (cc = coeff.data[coeff.off-1])) {
+							if (0 != (cc = coeffd[c0i-1])) {
 								++horiz;
 								horizSign += cc < 0 ? -1 : 1;
 							}
-							if (y0 + y1 > cb.y0 && 0 != coeff.data[coeff.off-tileComp.w-1])
-								diag++;
-							if (y0 + y1 < cb.y1 - 1 && (cbs8 || y1 < 3)
-							&& 0 != coeff.data[coeff.off+tileComp.w-1])
-								diag++;
+							if (chkNotFst && 0 != coeffd[c0i-tw-1]) diag++;
+							if (chkNotLst && 0 != coeffd[c0i+tw-1]) diag++;
 						}
 						if (x < cb.x1 - 1) {
-							if (0 != (cc = coeff.data[coeff.off+1])) {
+							if (0 != (cc = coeffd[c0i+1])) {
 								++horiz;
 								horizSign += cc < 0 ? -1 : 1;
 							}
-							if (y0+y1 > cb.y0 && 0 != coeff.data[coeff.off-tileComp.w+1])
-								diag++;
-							if (y0 + y1 < cb.y1 - 1 && (cbs8 || y1 < 3)
-							&& 0 != coeff.data[coeff.off+tileComp.w+1])
-								diag++;
+							if (chkNotFst && 0 != coeffd[c0i-tw+1]) diag++;
+							if (chkNotLst && 0 != coeffd[c0i+tw+1]) diag++;
 						}
-						if (y0+y1 > cb.y0 && 0 != (cc = coeff.data[coeff.off-tileComp.w])) {
+						if (chkNotFst && 0 != (cc = coeffd[c0i-tw])) {
 							++vert;
 							vertSign += cc < 0 ? -1 : 1;
 						}
-						if (y0+y1 < cb.y1-1 && (cbs8 || y1<3) && 0 != (cc=coeff.data[coeff.off+tileComp.w])) {
+						if (chkNotLst && 0 != (cc=coeffd[c0i+tw])) {
 							++vert;
 							vertSign += cc < 0 ? -1 : 1;
 						}
-						int cx = sigPropContext[horiz][vert][diag][res == 0 ? 1 : sb];
+						int cx = sigPropContext[horiz][vert][diag][res];
 						if (0 != cb.arithDecoder.DecodeBit(cx, cb.stats)) {
 							var sc = signContext[horizSign][vertSign];
-							coeff.data[coeff.off] 
-								= (0!=(cb.arithDecoder.DecodeBit(sc[0],cb.stats)^sc[1]))?-1:1;
+							coeffd[c0i] = (0==(cb.arithDecoder.DecodeBit(sc[0],cb.stats)^sc[1]))
+											? 1 : -1;
 						}
 					}
 				}
@@ -1297,44 +1261,44 @@ namespace XPdf {
 		}
 
 		void MagnitudeRefinementPass(JPXTileComp tileComp, JPXResLevel resLevel, JPXCodeBlock cb) {
-			ArrayPtr<int> coeff0 = new ArrayPtr<int>(cb.coeffs), coeff1 = new ArrayPtr<int>(cb.coeffs), coeff = new ArrayPtr<int>(cb.coeffs);
-			ArrayPtr<bool> touched0 = new ArrayPtr<bool>(cb.touched), touched1 = new ArrayPtr<bool>(cb.touched), touched = new ArrayPtr<bool>(cb.touched);
-			int x, y0, y1, cc;
-			for (y0 = cb.y0; y0 < cb.y1; 
-					y0 += 4, coeff0.off+=4*tileComp.w, touched0.off+=(4<<resLevel.codeBlockW)) {
-				for (x = cb.x0, coeff1.off=coeff0.off, touched1.off=touched0.off;
-					 x < cb.x1; ++x, coeff1.off++, touched1.off++) {
-					for (y1 = 0, coeff.off=coeff1.off, touched.off=touched1.off;
-						 y1<4 && y0+y1<cb.y1; ++y1, coeff.off+=tileComp.w, touched.off+=resLevel.cbW) {
-						if ((cc = coeff.data[coeff.off]) != 0 && !touched.data[touched.off]) {
+			int[] coeff = cb.coeffs;
+			bool[] touch = cb.touched;
+			int x, y0, y1, cc, c0i, c1i, c2i, t0i, t1i, t2i, tw = tileComp.w;
+			bool cbs8 = 0 == (tileComp.codeBlockStyle & 0x08);
+			for (y0=cb.y0, c0i=cb.coefOff, t0i=0; y0 < cb.y1; 
+					y0+=4, c0i+=4*tw, t0i+=(4<<resLevel.codeBlockW)) {
+				for (x = cb.x0, c1i=c0i, t1i=t0i;
+						x < cb.x1; ++x, c1i++, t1i++) {
+					for (y1 = 0, c2i=c1i, t2i=t1i; y1<4 && y0+y1<cb.y1; 
+							++y1, c2i+=tw, t2i+=resLevel.cbW) {
+						if ((cc = coeff[c2i]) != 0 && !touch[t2i]) {
 							int cx = 16;
 							if (cc == 1 || cc == -1) {
 								int all = 0;
-								bool cbs8 = 0 == (tileComp.codeBlockStyle & 0x08),
-									cy0 = y0 + y1 > cb.y0, cy1 = y0 + y1 < cb.y1 - 1;
+								bool cy0 = y0 + y1 > cb.y0, cy1 = y0 + y1 < cb.y1 - 1;
 								if (x > cb.x0) {
-									all += 0 != coeff.data[coeff.off-1] ? 1 : 0;
-									if (cy0 && 0 != coeff.data[coeff.off-tileComp.w-1])
+									all += 0 != coeff[c2i-1] ? 1 : 0;
+									if (cy0 && 0 != coeff[c2i-tw-1])
 										all++;
-									if (cy1 && (cbs8 || y1<3) && 0!=coeff.data[coeff.off+tileComp.w-1])
+									if (cy1 && (cbs8 || y1<3) && 0!= coeff[c2i+tw-1])
 										all++;
 								}
 								if (x < cb.x1 - 1) {
-									all += 0 != coeff.data[coeff.off+1] ? 1 : 0;
-									if (cy0 && 0 != coeff.data[coeff.off-tileComp.w+1])
+									all += 0 != coeff[c2i+1] ? 1 : 0;
+									if (cy0 && 0 != coeff[c2i-tw+1])
 										all++;
-									if (cy1 && (cbs8 || y1<3) && 0!=coeff.data[coeff.off+tileComp.w+1])
+									if (cy1 && (cbs8 || y1<3) && 0!= coeff[c2i+tw+1])
 										all++;
 								}
-								if (cy0 && 0 != coeff.data[coeff.off-tileComp.w])
+								if (cy0 && 0 != coeff[c2i-tw])
 									all++;
-								if (cy1 && (cbs8 || y1<3) && 0!=coeff.data[coeff.off+tileComp.w])
+								if (cy1 && (cbs8 || y1<3) && 0!= coeff[c2i+tw])
 									all++;
 								cx = all != 0 ? 15 : 14;
 							}
 							int bit = cb.arithDecoder.DecodeBit(cx, cb.stats);
-							coeff.data[coeff.off] = (cc << 1) + (cc < 0 ? -bit : +bit);
-							touched.data[touched.off] = true;
+							coeff[c2i] = (cc << 1) + (cc < 0 ? -bit : +bit);
+							touch[t2i] = true;
 						}
 					}
 				}
@@ -1342,57 +1306,52 @@ namespace XPdf {
 			++cb.nextPass;
 		}
 
-		int SignificancePropagationPass(JPXTileComp tileComp, JPXResLevel resLevel, int res, int sb, JPXCodeBlock cb) {
-			ArrayPtr<int> coeff0 = new ArrayPtr<int>(cb.coeffs), coeff1 = new ArrayPtr<int>(cb.coeffs), coeff = new ArrayPtr<int>(cb.coeffs);
-			ArrayPtr<bool> touched0 = new ArrayPtr<bool>(cb.touched), touched1 = new ArrayPtr<bool>(cb.touched), touched = new ArrayPtr<bool>(cb.touched);
-			int x, y0, y1, cc;
-			for (y0 = cb.y0, coeff0.set(cb.coeffs), touched0.set(cb.touched); y0 < cb.y1;
-											y0 += 4, coeff0.inc(4 * tileComp.w), touched0.inc(4 << resLevel.codeBlockW)) {
-				for (x = cb.x0, coeff1.off = coeff0.off, touched1.off = touched0.off;
-					 x < cb.x1; ++x, coeff1.off++, touched1.off++) {
-					for (y1 = 0, coeff.off=coeff1.off, touched.off=touched1.off;
-						 y1 < 4 && y0 + y1 < cb.y1;
-						 ++y1, coeff.off += tileComp.w, touched.off += resLevel.cbW) {
-						if (0 == coeff.data[coeff.off]) {
+		int SignificancePropagationPass(JPXTileComp tileComp, JPXResLevel resLevel, int res, JPXCodeBlock cb) {
+			int x, y0, y1, cc, c0i, c1i, c2i, t0i, t1i, t2i, tw = tileComp.w;
+			int[]  coeff = cb.coeffs;
+			bool[] touch = cb.touched;
+			bool cbs8 = 0 == (tileComp.codeBlockStyle & 0x08);
+			for (y0=cb.y0, c1i=cb.coefOff, t1i = 0; y0 < cb.y1;
+					y0 += 4, c1i+=4*tw, t1i += 4 << resLevel.codeBlockW) {
+				for (x=cb.x0, c2i=c1i, t2i=t1i; x < cb.x1; ++x, c2i++, t2i++) {
+					for (y1=0, c0i=c2i, t0i=t2i; y1 < 4 && y0 + y1 < cb.y1;
+							++y1, c0i += tw, t0i += resLevel.cbW) {
+						if (0 == coeff[c0i]) {
 							int horiz = 0, vert = 0, diag = 0, horizSign = 2, vertSign = 2;
-							bool cbs8 = 0 == (tileComp.codeBlockStyle & 0x08),
-								cy0 = y0 + y1 > cb.y0, cy1 = y0 + y1 < cb.y1 - 1;
+							bool chkNotFst = y0 + y1 > cb.y0, 
+								chkNotLst = y0 + y1 < cb.y1 - 1 && (cbs8 || y1 < 3);
 							if (x > cb.x0) {
-								if (0 != (cc = coeff.data[coeff.off-1])) {
+								if (0 != (cc = coeff[c0i-1])) {
 									++horiz;
 									horizSign += cc < 0 ? -1 : 1;
 								}
-								if (cy0 && 0 != coeff.data[coeff.off-tileComp.w-1])
-									diag++;
-								if (cy1 && (cbs8 || y1<3) && 0 != coeff.data[coeff.off+tileComp.w-1])
-									diag++;
+								if (chkNotFst && 0 != coeff[c0i-tw-1]) diag++;
+								if (chkNotLst && 0 != coeff[c0i+tw-1]) diag++;
 							}
 							if (x < cb.x1 - 1) {
-								if (0 != (cc = coeff.data[coeff.off+1])) {
+								if (0 != (cc = coeff[c0i+1])) {
 									++horiz;
 									horizSign += cc < 0 ? -1 : 1;
 								}
-								if (cy0 && 0 != coeff.data[coeff.off-tileComp.w+1])
-									diag++;
-								if (cy1 && (cbs8 || y1<3) && 0 != coeff.data[coeff.off+tileComp.w+1])
-									diag++;
+								if (chkNotFst && 0 != coeff[c0i-tw+1]) diag++;
+								if (chkNotLst && 0 != coeff[c0i+tw+1]) diag++;
 							}
-							if (cy0 && 0 != (cc=coeff.data[coeff.off-tileComp.w])) {
+							if (chkNotFst && 0 != (cc = coeff[c0i-tw])) {
 								++vert;
 								vertSign += cc < 0 ? -1 : 1;
 							}
-							if (cy1 && (cbs8 || y1 < 3) && 0 != (cc=coeff.data[coeff.off+tileComp.w])) {
+							if (chkNotLst && 0 != (cc = coeff[c0i+tw])) {
 								++vert;
 								vertSign += cc < 0 ? -1 : 1;
 							}
-							int cx = sigPropContext[horiz][vert][diag][res == 0 ? 1 : sb];
+							int cx = sigPropContext[horiz][vert][diag][res];
 							if (cx != 0) {
 								if (0 != cb.arithDecoder.DecodeBit(cx, cb.stats)) {
 									var sc = signContext[horizSign][vertSign];
-									coeff[0] = 0!=(cb.arithDecoder.DecodeBit(sc[0], cb.stats)
+									coeff[c0i] = 0!=(cb.arithDecoder.DecodeBit(sc[0], cb.stats)
 														^ sc[1]) ? -1 : 1;
 								}
-								touched[0] = true;
+								touch[t0i] = true;
 							}
 						}
 					}
@@ -1403,9 +1362,7 @@ namespace XPdf {
 		}
 
 		void InverseTransform(JPXTileComp tileComp) {
-			ArrayPtr<int> coeff0 = new ArrayPtr<int>(), coeff = new ArrayPtr<int>();
-			ArrayPtr<bool> touched0 = new ArrayPtr<bool>(), touched = new ArrayPtr<bool>();
-			int eps, shift, r, x, y, shift2;
+			int eps, shift, r, x, y, shift2, c0i, c1i, t0i, t1i;
 			double mu;
 			JPXResLevel resLevel = tileComp.resLevels[0];   //----- (NL)LL subband (resolution level 0)
 			int qStyle = tileComp.quantStyle & 0x1f;      // i-quant parameters
@@ -1427,16 +1384,18 @@ namespace XPdf {
 				for (int cbY = 0, cbi = 0; cbY < subband.nYCBs; ++cbY)
 					for (int cbX = 0; cbX < subband.nXCBs; ++cbX, cbi++) {
 						JPXCodeBlock cb = subband.cbs[cbi];
-						for (y = cb.y0, coeff0.set(cb.coeffs), touched0.set(cb.touched);
-									 y < cb.y1; ++y, coeff0.inc(tileComp.w), touched0.inc(resLevel.cbW)) {
-							for (x = cb.x0, coeff.set(coeff0), touched.set(touched0);
-											 x < cb.x1; ++x, ++coeff, ++touched) {
-								int val = coeff[0];
+						int[] coeffd = cb.coeffs;
+						bool[] touch = cb.touched;
+						for (y = cb.y0, c0i = cb.coefOff, t0i=0;
+									 y < cb.y1; ++y, c0i+=tileComp.w, t0i+=resLevel.cbW) {
+							for (x=cb.x0, c1i=c0i, t1i=t0i; x < cb.x1; ++x, ++c1i, ++t1i) {
+								int val = coeffd[c1i];
 								if (val != 0) {
-									shift2 = shift - (cb.nZeroBitPlanes + cb.len + (touched[0] ? 1 : 0));
+									shift2 = shift 
+										- (cb.nBitPlanes0 + cb.len + (touch[t1i] ? 1 : 0));
 									if (shift2 > 0)
-										val = (val << shift2) + (val < 0
-											? -(1 << (shift2 - 1)) : (1 << (shift2 - 1)));
+										val = (val << shift2) 
+											+ (val<0 ? -(1<<(shift2-1)) : (1<<(shift2-1)));
 									else
 										val >>= -shift2;
 									if (qStyle != 0)
@@ -1444,7 +1403,7 @@ namespace XPdf {
 									else if (tileComp.transform == 0)
 										val &= -1 << (fracBits - tileComp.prec);
 								}
-								coeff[0] = val;
+								coeffd[c1i] = val;
 							}
 						}
 					}
@@ -1458,10 +1417,8 @@ namespace XPdf {
 				InverseTransformLevel(tileComp, r, tileComp.resLevels[r]);
 		}
 		void InverseTransformLevel(JPXTileComp tileComp, int r, JPXResLevel resLevel) {
-			ArrayPtr<int> coeff0 = new ArrayPtr<int>(), coeff = new ArrayPtr<int>();
-			ArrayPtr<bool> touched0 = new ArrayPtr<bool>(), touched = new ArrayPtr<bool>();
 			double mu;
-			int shift, t, x, y;
+			int shift, t, x, y, c0i, c1i, t0i, t1i;
 			int qStyle = tileComp.quantStyle & 0x1f;
 			int guard = (tileComp.quantStyle >> 5) & 7, eps;
 			int nx1 = resLevel.bx1[1] - resLevel.bx0[1];
@@ -1491,16 +1448,18 @@ namespace XPdf {
 					for (int cbi = 0, cbY = 0; cbY < subband.nYCBs; ++cbY) {
 						for (int cbX = 0; cbX < subband.nXCBs; ++cbX, cbi++) {
 							JPXCodeBlock cb = subband.cbs[cbi];
-							for (y = cb.y0, coeff0.set(cb.coeffs), touched0.set(cb.touched);
-								 y < cb.y1; ++y, coeff0.inc(tileComp.w), touched0.inc(resLevel.cbW)) {
-								for (x = cb.x0, coeff.set(coeff0), touched.set(touched0);
-										x < cb.x1; ++x, ++coeff.off, ++touched.off) {
-									int val = coeff.data[coeff.off];// coeff[0];
+							int[] coeff = cb.coeffs;
+							bool[] touch = cb.touched;
+							for (y=cb.y0, c0i=cb.coefOff, t0i=0;
+								 y < cb.y1; ++y, c0i+=tileComp.w, t0i+=resLevel.cbW) {
+								for (x=cb.x0, c1i=c0i, t1i=t0i; x < cb.x1; ++x, ++c1i, ++t1i) {
+									int val = coeff[c1i];// coeff[0];
 									if (val != 0) {
-										int shift2 = shift - (cb.nZeroBitPlanes + cb.len + (touched[0] ? 1 : 0));
+										int shift2 = shift 
+											- (cb.nBitPlanes0+cb.len+(touch[t1i]?1:0));
 										if (shift2 > 0)
 											val = (val << shift2)
-												+ (val < 0 ? -(1 << (shift2 - 1)) : (1 << (shift2 - 1)));
+												+ (val<0 ? -(1<<(shift2-1)) : (1<<(shift2-1)));
 										else
 											val >>= -shift2;
 										if (qStyle != 0)
@@ -1508,7 +1467,7 @@ namespace XPdf {
 										else if (tileComp.transform == 0)
 											val &= -1 << (fracBits - tileComp.prec);
 									}
-									coeff.data[coeff.off] = val;// coeff[0]
+									coeff[c1i] = val;// coeff[0]
 								}
 							}
 						}
@@ -1516,29 +1475,28 @@ namespace XPdf {
 				}
 			}
 			//----- inverse transform
-			ArrayPtr<int> dataPtr = new ArrayPtr<int>(tileComp.data),
-						   bufPtr = new ArrayPtr<int>(tileComp.buf);
+			int[] pData = tileComp.data, pBuf = tileComp.buf;
 			int offset = 3 + (resLevel.x0 & 1);                                     // horizontal (row) transforms
-			int o1, o2;
+			int o1, o2, iData, iBuf;
 			(o1, o2) = resLevel.bx0[0] == resLevel.bx0[1] ? (0, 1) : (1, 0);
-			for (y = 0; y < ny2; ++y, dataPtr.off += tileComp.w) {
-				for (x = 0, bufPtr.off = offset + o1; x < nx1; ++x, bufPtr.off += 2)
-					bufPtr.data[bufPtr.off] = dataPtr.data[dataPtr.off + x];        // fetch LL/LH
-				for (x = nx1, bufPtr.off = offset + o2; x < nx2; ++x, bufPtr.off += 2)
-					bufPtr.data[bufPtr.off] = dataPtr.data[dataPtr.off + x];        // fetch LL/LH
+			for (y = iData = 0; y < ny2; ++y, iData += tileComp.w) {
+				for (x = 0, iBuf = offset + o1; x < nx1; ++x, iBuf += 2)
+					pBuf[iBuf] = pData[iData + x];        // fetch LL/LH
+				for (x = nx1, iBuf = offset + o2; x < nx2; ++x, iBuf += 2)
+					pBuf[iBuf] = pData[iData + x];        // fetch LL/LH
 				InverseTransform1D(tileComp, tileComp.buf, offset, nx2);
-				Array.Copy(bufPtr.data, offset, dataPtr.data, dataPtr.off, nx2);
+				Array.Copy(pBuf, offset, pData, iData, nx2);
 			}
 			offset = 3 + (resLevel.y0 & 1);                                         // vertical (column) transforms
 			(o1, o2) = resLevel.by0[0] == resLevel.by0[1] ? (0, 1) : (1, 0);
-			for (x = 0, dataPtr.off = 0; x < nx2; ++x, ++dataPtr.off) {
-				for (y = 0, bufPtr.off = offset + o1; y < ny1; ++y, bufPtr.off += 2)
-					bufPtr.data[bufPtr.off] = dataPtr.data[dataPtr.off + y * tileComp.w];   // fetch LL/HL
-				for (y = ny1, bufPtr.off = offset + o2; y < ny2; ++y, bufPtr.off += 2)
-					bufPtr.data[bufPtr.off] = dataPtr.data[dataPtr.off + y * tileComp.w];   // fetch LH/HH
+			for (x = 0, iData = 0; x < nx2; ++x, ++iData) {
+				for (y = 0, iBuf = offset + o1; y < ny1; ++y, iBuf += 2)
+					pBuf[iBuf] = pData[iData + y * tileComp.w];   // fetch LL/HL
+				for (y = ny1, iBuf = offset + o2; y < ny2; ++y, iBuf += 2)
+					pBuf[iBuf] = pData[iData + y * tileComp.w];   // fetch LH/HH
 				InverseTransform1D(tileComp, tileComp.buf, offset, ny2);
-				for (y = 0, bufPtr.off = offset; y < ny2; ++y, ++bufPtr.off)
-					dataPtr.data[dataPtr.off + y * tileComp.w] = bufPtr.data[bufPtr.off];
+				for (y = 0, iBuf = offset; y < ny2; ++y, ++iBuf)
+					pData[iData + y * tileComp.w] = pBuf[iBuf];
 			}
 		}
 		// constants used in the IDWT
@@ -1546,6 +1504,7 @@ namespace XPdf {
 			idwtGamma = 0.882911075530934, idwtDelta = 0.443506852043971,
 			idwtKappa = 1.230174104914001, idwtIKappa = (1.0 / idwtKappa);
 		void InverseTransform1D(JPXTileComp tileComp, int[] data, int offset, int n) {
+			//var data = _data;
 			if (n != 1) {
 				int end = offset + n, i;
 				data[end] = data[end - 2];
@@ -1570,14 +1529,10 @@ namespace XPdf {
 				if (offset == 4)
 					data[0] = data[offset + 4];
 				if (tileComp.transform == 0) {              //----- 9-7 irreversible filter
-					//for (i = 1; i <= end + 2; i += 2)       // step 1 (even)
-					//	data[i] = (int)(idwtKappa * data[i]);
 					for (i = 0; i <= end + 3; i += 2)       // step 2 (odd)
 						data[i] = (int)(idwtIKappa * data[i]);
 					for (i = 1; i <= end + 2; i += 2)       // step 1&3 (even) - combined
 						data[i] = (int)(idwtKappa*data[i] - idwtDelta*(data[i-1]+data[i+1]));
-					//for (i = 1; i <= end + 2; i += 2)       // step 3 (even)
-					//	data[i] -= (int)(idwtDelta * (data[i - 1] + data[i + 1]));
 					for (i = 2; i <= end + 1; i += 2)       // step 4 (odd)
 						data[i] -= (int)(idwtGamma * (data[i - 1] + data[i + 1]));
 					for (i = 3; i <= end; i += 2)           // step 5 (even)
@@ -1596,7 +1551,7 @@ namespace XPdf {
 				data[0] >>= 1;
 		}
 		void InverseMultiCompAndDC(JPXTile tile) {
-			int t, j, x, y;
+			int t, j, x, y, iData;
 			if (tile.multiComp == 1) {                  //----- inverse multi-component transform
 				if (img.nComps < 3
 				|| tile.tileComps[0].hSep != tile.tileComps[1].hSep
@@ -1624,16 +1579,16 @@ namespace XPdf {
 			//----- DC level shift
 			for (int comp = 0; comp < img.nComps; ++comp) {
 				JPXTileComp tileComp = tile.tileComps[comp];
-				ArrayPtr<int> dataPtr = new ArrayPtr<int>(tileComp.data);
+				int[] pData = tileComp.data;
 				if (tileComp.sgned) {           // signed: clip
 					int minVal = -(1 << (tileComp.prec - 1));
 					int maxVal = (1 << (tileComp.prec - 1)) - 1;
-					for (y = 0; y < tileComp.h; ++y)
-						for (x = 0; x < tileComp.w; ++x, ++dataPtr) {
-							int coeff = dataPtr[0];
+					for (iData = y = 0; y < tileComp.h; ++y)
+						for (x = 0; x < tileComp.w; ++x, ++iData) {
+							int coeff = pData[iData];
 							if (tileComp.transform == 0)
 								coeff >>= fracBits - tileComp.prec;
-							dataPtr[0] = Math.Min(Math.Max(coeff, minVal), maxVal);
+							pData[iData] = coeff<minVal ? minVal : (coeff>maxVal ? maxVal : coeff);
 						}
 				}
 				else {                      // unsigned: inverse DC level shift and clip
@@ -1641,12 +1596,12 @@ namespace XPdf {
 					int zeroVal = 1 << (tileComp.prec - 1);
 					int shift = fracBits - tileComp.prec;
 					int rounding = 1 << (shift - 1);
-					for (y = 0; y < tileComp.h; ++y)
-						for (x = 0; x < tileComp.w; ++x, ++dataPtr) {
-							int coeff = dataPtr[0];
+					for (iData = y = 0; y < tileComp.h; ++y)
+						for (x = 0; x < tileComp.w; ++x, ++iData) {
+							int coeff = pData[iData];
 							if (tileComp.transform == 0)
 								coeff = (coeff + rounding) >> shift;
-							dataPtr[0] = Math.Min(Math.Max(coeff + zeroVal, 0), maxVal);
+							pData[iData] = Math.Min(Math.Max(coeff + zeroVal, 0), maxVal);
 						}
 				}
 			}
