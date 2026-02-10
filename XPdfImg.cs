@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Windows.Forms;
 using static XPdf.ArithmDecoder;
 
 namespace XPdf {
@@ -411,37 +412,24 @@ namespace XPdf {
 			internal JPXTile[] tiles = null;    // the tiles (len = nXTiles * nYTiles)
 		};
 
-		const int jpxNContexts = 19, jpxContextSigProp = 0, jpxContextRunLength = 17, jpxContextUniform = 18;
+		const int jpxNContexts = 19, jpxContextSigProp = 0, jpxContextRunLen = 17, jpxContextUniform = 18;
 		const int jpxPassSigProp = 0, jpxPassMagRef = 1, jpxPassCleanup = 2;
 
 		//------------------------------------------------------------------------
-		static readonly int[][][][] sigPropContext = new int[][][][] {
-			new int[][][] {
-				new int[][] { new int[]{0,0,0},new int[]{1,1,3},new int[]{2,2,6},new int[]{2,2,8},new int[]{2,2,8}},
-				new int[][] { new int[]{5,3,1},new int[]{6,3,4},new int[]{6,3,7},new int[]{6,3,8},new int[]{6,3,8}},
-				new int[][] { new int[]{8,4,2},new int[]{8,4,5},new int[]{8,4,7},new int[]{8,4,8},new int[]{8,4,8}}
-			}, new int[][][] {
-				new int[][] { new int[]{3,5,1},new int[]{3,6,4},new int[]{3,6,7},new int[]{3,6,8},new int[]{3,6,8}},
-				new int[][] { new int[]{7,7,2},new int[]{7,7,5},new int[]{7,7,7},new int[]{7,7,8},new int[]{7,7,8}},
-				new int[][] { new int[]{8,7,2},new int[]{8,7,5},new int[]{8,7,7},new int[]{8,7,8},new int[]{8,7,8}}
-			}, new int[][][] {
-				new int[][] { new int[]{4,8,2},new int[]{4,8,5},new int[]{4,8,7},new int[]{4,8,8},new int[]{4,8,8}},
-				new int[][] { new int[]{7,8,2},new int[]{7,8,5},new int[]{7,8,7},new int[]{7,8,8},new int[]{7,8,8}},
-				new int[][] { new int[]{8,8,2},new int[]{8,8,5},new int[]{8,8,7},new int[]{8,8,8},new int[]{8,8,8}}
-			}
+		const int sigPropCtxH = 15, sigPropCtxV = 5; // 3 hor, 3 ver, 5 diag
+		static readonly int[][] sigPropCtx = new int[][] {
+			new int[] {0,1,2,2,2, 5,6,6,6,6, 8,8,8,8,8, 3,3,3,3,3, 7,7,7,7,7, 8,8,8,8,8, 4,4,4,4,4, 7,7,7,7,7, 8,8,8,8,8 },
+			new int[] {0,1,2,2,2, 3,3,3,3,3, 4,4,4,4,4, 5,6,6,6,6, 7,7,7,7,7, 7,7,7,7,7, 8,8,8,8,8, 8,8,8,8,8, 8,8,8,8,8 },
+			new int[] {0,3,6,8,8, 1,4,7,8,8, 2,5,7,8,8, 1,4,7,8,8, 2,5,7,8,8, 2,5,7,8,8, 2,5,7,8,8, 2,5,7,8,8, 2,5,7,8,8 },
 		};
-
 		// arithmetic decoder context and xor bit for the sign bit in the significance propagation pass:
-		//     [horiz][vert][k]
+		//     [horiz*5+vert] & (k << 4)
 		// where horiz/vert are offset by 2 (i.e., range is -2 .. 2)
 		// and k = 0 for the context
 		//       = 1 for the xor bit
-		static readonly int[][][] signContext = new int[][][] {
-			new int[][]{new int[]{13,1},new int[]{13,1},new int[]{12,1},new int[]{11,1},new int[]{11,1}},
-			new int[][]{new int[]{13,1},new int[]{13,1},new int[]{12,1},new int[]{11,1},new int[]{11,1}},
-			new int[][]{new int[]{10,1},new int[]{10,1},new int[]{ 9,0},new int[]{10,0},new int[]{10,0}},
-			new int[][]{new int[]{11,0},new int[]{11,0},new int[]{12,0},new int[]{13,0},new int[]{13,0}},
-			new int[][]{new int[]{11,0},new int[]{11,0},new int[]{12,0},new int[]{13,0},new int[]{13,0}},
+		static readonly int[] signContext = new int[] {
+			0x1d,0x1d,0x1c,0x1b,0x1b, 0x1d,0x1d,0x1c,0x1b,0x1b, 0x1a,0x1a,0x09,0x0a,0x0a,
+			0x0b,0x0b,0x0c,0x0d,0x0d, 0x0b,0x0b,0x0c,0x0d,0x0d
 		};
 		// sum of the sample size (number of bits) and the number of bits to
 		// the right of the decimal point for the fixed point arithmetic used
@@ -1140,7 +1128,7 @@ namespace XPdf {
 				cb.arithDecoder.Start();
 				cb.stats = new CXStats(jpxNContexts);
 				cb.stats.SetEntry(jpxContextSigProp, 4, 0);
-				cb.stats.SetEntry(jpxContextRunLength, 3, 0);
+				cb.stats.SetEntry(jpxContextRunLen, 3, 0);
 				cb.stats.SetEntry(jpxContextUniform, 46, 0);
 			}
 			for (i = 0; i < cb.nCodingPasses; ++i) {
@@ -1156,7 +1144,7 @@ namespace XPdf {
 				if (0 != (tileComp.codeBlockStyle & 0x02)) {
 					cb.stats.Reset();
 					cb.stats.SetEntry(jpxContextSigProp, 4, 0);
-					cb.stats.SetEntry(jpxContextRunLength, 3, 0);
+					cb.stats.SetEntry(jpxContextRunLen, 3, 0);
 					cb.stats.SetEntry(jpxContextUniform, 46, 0);
 				}
 				if (0 != (tileComp.codeBlockStyle & 0x04))
@@ -1166,15 +1154,15 @@ namespace XPdf {
 		}
 
 		private static void CleanupPass(JPXTileComp tileComp, JPXResLevel resLvl, int res, JPXCodeBlock cb) {
-			int[] coeffd = cb.coeffs;
+			int[] coeffd = cb.coeffs, sigProp = sigPropCtx[res];
 			bool[] touchd = cb.touched;
 			int c0i, c1i, c2i, t0i, t1i, t2i, x, y0, y1, cc, tw=tileComp.w, cbw=resLvl.cbW;
+			bool cbs8 = 0 == (tileComp.codeBlockStyle & 0x08);
 			for (y0 = cb.y0, c1i = cb.coefOff, t0i=0; y0 < cb.y1;
 					y0 += 4, c1i+=4*tw, t0i+=4<<resLvl.codeBlockW) {
 				for (x = cb.x0, c2i=c1i, t1i=t0i; x < cb.x1; ++x, ++c2i, ++t1i) {
 					y1 = 0;
-					bool cbs8 = 0==(tileComp.codeBlockStyle&0x08),
-						cx0 = x==cb.x0, cy0 = y0==cb.y0, cx1 = x==cb.x1-1, cy1 = y0+4==cb.y1;
+					bool cx0 = x==cb.x0, cy0 = y0==cb.y0, cx1 = x==cb.x1-1, cy1 = y0+4==cb.y1;
 					if (y0 + 3 < cb.y1
 					&& !touchd[t1i]
 					&& !touchd[t1i+cbw]
@@ -1194,17 +1182,15 @@ namespace XPdf {
 					&& (!cbs8 || ((    cy1 || 0 == coeffd[c2i+4*tw])
 							&& (cx0 || cy1 || 0 == coeffd[c2i+4*tw-1])
 							&& (cx1 || cy1 || 0 == coeffd[c2i+4*tw+1])))) {
-						if (0 != cb.arithDecoder.DecodeBit(jpxContextRunLength, cb.stats)) {
+						if (0 != cb.arithDecoder.DecodeBit(jpxContextRunLen, cb.stats)) {
 							y1 = cb.arithDecoder.DecodeBit(jpxContextUniform, cb.stats);
 							y1 = (y1 << 1) | cb.arithDecoder.DecodeBit(jpxContextUniform, cb.stats);
-							c0i = c2i + y1 * tw;
-							var sc = signContext[2][2];
-							coeffd[c0i] 
-								= (0 != (cb.arithDecoder.DecodeBit(sc[0],cb.stats)^sc[1])) ? -1 : 1;
+							c0i = c2i + y1 * tw;                // signContext[12-0sign]=9
+							coeffd[c0i] = (0 != cb.arithDecoder.DecodeBit(9, cb.stats)) ? -1 : 1;
 							++y1;
 						}
 						else
-							y1 = 4;
+							continue;
 					}
 					for (c0i=c2i+y1*tw, t2i=t1i+(y1<<resLvl.codeBlockW);
 							y1 < 4 && y0 + y1 < cb.y1; ++y1, c0i+=tw, t2i+=cbw) {
@@ -1212,38 +1198,38 @@ namespace XPdf {
 							touchd[t2i] = false;
 							continue;
 						}
-						int horiz = 0, vert = 0, diag = 0, horizSign = 2, vertSign = 2;
+						int pi = 0, si = 12;
 						bool chkNotFst = y0 + y1 > cb.y0,
 							chkNotLst = y0 + y1 < cb.y1 - 1 && (cbs8 || y1 < 3);
 						if (x > cb.x0) {
 							if (0 != (cc = coeffd[c0i-1])) {
-								++horiz;
-								horizSign += cc < 0 ? -1 : 1;
+								pi += sigPropCtxH;
+								si += cc < 0 ? -sigPropCtxV : sigPropCtxV;
 							}
-							if (chkNotFst && 0 != coeffd[c0i-tw-1]) diag++;
-							if (chkNotLst && 0 != coeffd[c0i+tw-1]) diag++;
+							if (chkNotFst && 0 != coeffd[c0i-tw-1]) pi++;
+							if (chkNotLst && 0 != coeffd[c0i+tw-1]) pi++;
 						}
 						if (x < cb.x1 - 1) {
 							if (0 != (cc = coeffd[c0i+1])) {
-								++horiz;
-								horizSign += cc < 0 ? -1 : 1;
+								pi += sigPropCtxH;
+								si += cc < 0 ? -sigPropCtxV : sigPropCtxV;
 							}
-							if (chkNotFst && 0 != coeffd[c0i-tw+1]) diag++;
-							if (chkNotLst && 0 != coeffd[c0i+tw+1]) diag++;
+							if (chkNotFst && 0 != coeffd[c0i-tw+1]) pi++;
+							if (chkNotLst && 0 != coeffd[c0i+tw+1]) pi++;
 						}
 						if (chkNotFst && 0 != (cc = coeffd[c0i-tw])) {
-							++vert;
-							vertSign += cc < 0 ? -1 : 1;
+							pi += sigPropCtxV;
+							si += cc < 0 ? -1 : 1;
 						}
 						if (chkNotLst && 0 != (cc=coeffd[c0i+tw])) {
-							++vert;
-							vertSign += cc < 0 ? -1 : 1;
+							pi += sigPropCtxV;
+							si += cc < 0 ? -1 : 1;
 						}
-						int cx = sigPropContext[horiz][vert][diag][res];
+						int cx = sigProp[pi];
 						if (0 != cb.arithDecoder.DecodeBit(cx, cb.stats)) {
-							var sc = signContext[horizSign][vertSign];
-							coeffd[c0i] = (0==(cb.arithDecoder.DecodeBit(sc[0],cb.stats)^sc[1]))
-											? 1 : -1;
+							var sc = signContext[si];
+							coeffd[c0i] = 0==(cb.arithDecoder.DecodeBit(sc&0x0f,cb.stats)
+												^ (sc >> 4)) ? 1 : -1;
 						}
 					}
 				}
@@ -1265,35 +1251,28 @@ namespace XPdf {
 			bool[] touch = cb.touched;
 			int x, y0, y1, cc, c0i, c1i, c2i, t0i, t1i, t2i, tw = tileComp.w;
 			bool cbs8 = 0 == (tileComp.codeBlockStyle & 0x08);
-			for (y0=cb.y0, c0i=cb.coefOff, t0i=0; y0 < cb.y1; 
-					y0+=4, c0i+=4*tw, t0i+=(4<<resLevel.codeBlockW)) {
-				for (x = cb.x0, c1i=c0i, t1i=t0i;
-						x < cb.x1; ++x, c1i++, t1i++) {
+			for (y0=cb.y0, c0i=cb.coefOff, t0i=0; y0<cb.y1; y0+=4, c0i+=4*tw, t0i+=(4<<resLevel.codeBlockW)) 
+				for (x=cb.x0, c1i=c0i, t1i=t0i; x<cb.x1; ++x, c1i++, t1i++) {
 					for (y1 = 0, c2i=c1i, t2i=t1i; y1<4 && y0+y1<cb.y1; 
 							++y1, c2i+=tw, t2i+=resLevel.cbW) {
 						if ((cc = coeff[c2i]) != 0 && !touch[t2i]) {
 							int cx = 16;
 							if (cc == 1 || cc == -1) {
 								int all = 0;
-								bool cy0 = y0 + y1 > cb.y0, cy1 = y0 + y1 < cb.y1 - 1;
+								bool cy0 = y0 + y1 > cb.y0, 
+									 cy1 = y0 + y1 < cb.y1 - 1 && (cbs8 || y1 < 3);
 								if (x > cb.x0) {
 									all += 0 != coeff[c2i-1] ? 1 : 0;
-									if (cy0 && 0 != coeff[c2i-tw-1])
-										all++;
-									if (cy1 && (cbs8 || y1<3) && 0!= coeff[c2i+tw-1])
-										all++;
+									if (cy0 && 0 != coeff[c2i-tw-1]) all++;
+									if (cy1 && 0 != coeff[c2i+tw-1]) all++;
 								}
 								if (x < cb.x1 - 1) {
 									all += 0 != coeff[c2i+1] ? 1 : 0;
-									if (cy0 && 0 != coeff[c2i-tw+1])
-										all++;
-									if (cy1 && (cbs8 || y1<3) && 0!= coeff[c2i+tw+1])
-										all++;
+									if (cy0 && 0 != coeff[c2i-tw+1]) all++;
+									if (cy1 && 0 != coeff[c2i+tw+1]) all++;
 								}
-								if (cy0 && 0 != coeff[c2i-tw])
-									all++;
-								if (cy1 && (cbs8 || y1<3) && 0!= coeff[c2i+tw])
-									all++;
+								if (cy0 && 0 != coeff[c2i-tw]) all++;
+								if (cy1 && 0 != coeff[c2i+tw]) all++;
 								cx = all != 0 ? 15 : 14;
 							}
 							int bit = cb.arithDecoder.DecodeBit(cx, cb.stats);
@@ -1302,13 +1281,12 @@ namespace XPdf {
 						}
 					}
 				}
-			}
 			++cb.nextPass;
 		}
 
 		int SignificancePropagationPass(JPXTileComp tileComp, JPXResLevel resLevel, int res, JPXCodeBlock cb) {
 			int x, y0, y1, cc, c0i, c1i, c2i, t0i, t1i, t2i, tw = tileComp.w;
-			int[]  coeff = cb.coeffs;
+			int[] coeff = cb.coeffs, sigProp = sigPropCtx[res];
 			bool[] touch = cb.touched;
 			bool cbs8 = 0 == (tileComp.codeBlockStyle & 0x08);
 			for (y0=cb.y0, c1i=cb.coefOff, t1i = 0; y0 < cb.y1;
@@ -1317,39 +1295,39 @@ namespace XPdf {
 					for (y1=0, c0i=c2i, t0i=t2i; y1 < 4 && y0 + y1 < cb.y1;
 							++y1, c0i += tw, t0i += resLevel.cbW) {
 						if (0 == coeff[c0i]) {
-							int horiz = 0, vert = 0, diag = 0, horizSign = 2, vertSign = 2;
+							int pi = 0, si = 12;
 							bool chkNotFst = y0 + y1 > cb.y0, 
 								chkNotLst = y0 + y1 < cb.y1 - 1 && (cbs8 || y1 < 3);
 							if (x > cb.x0) {
 								if (0 != (cc = coeff[c0i-1])) {
-									++horiz;
-									horizSign += cc < 0 ? -1 : 1;
+									pi += sigPropCtxH;
+									si += cc < 0 ? -sigPropCtxV : sigPropCtxV;
 								}
-								if (chkNotFst && 0 != coeff[c0i-tw-1]) diag++;
-								if (chkNotLst && 0 != coeff[c0i+tw-1]) diag++;
+								if (chkNotFst && 0 != coeff[c0i-tw-1]) pi++;
+								if (chkNotLst && 0 != coeff[c0i+tw-1]) pi++;
 							}
 							if (x < cb.x1 - 1) {
 								if (0 != (cc = coeff[c0i+1])) {
-									++horiz;
-									horizSign += cc < 0 ? -1 : 1;
+									pi += sigPropCtxH;
+									si += cc < 0 ? -sigPropCtxV : sigPropCtxV;
 								}
-								if (chkNotFst && 0 != coeff[c0i-tw+1]) diag++;
-								if (chkNotLst && 0 != coeff[c0i+tw+1]) diag++;
+								if (chkNotFst && 0 != coeff[c0i-tw+1]) pi++;
+								if (chkNotLst && 0 != coeff[c0i+tw+1]) pi++;
 							}
 							if (chkNotFst && 0 != (cc = coeff[c0i-tw])) {
-								++vert;
-								vertSign += cc < 0 ? -1 : 1;
+								pi += sigPropCtxV;
+								si += cc < 0 ? -1 : 1;
 							}
 							if (chkNotLst && 0 != (cc = coeff[c0i+tw])) {
-								++vert;
-								vertSign += cc < 0 ? -1 : 1;
+								pi += sigPropCtxV;
+								si += cc < 0 ? -1 : 1;
 							}
-							int cx = sigPropContext[horiz][vert][diag][res];
+							int cx = sigProp[pi];
 							if (cx != 0) {
 								if (0 != cb.arithDecoder.DecodeBit(cx, cb.stats)) {
-									var sc = signContext[horizSign][vertSign];
-									coeff[c0i] = 0!=(cb.arithDecoder.DecodeBit(sc[0], cb.stats)
-														^ sc[1]) ? -1 : 1;
+									var sc = signContext[si];
+									coeff[c0i] = 0==(cb.arithDecoder.DecodeBit(sc&0x0f, cb.stats)
+														^ (sc >> 4)) ? 1 : -1;
 								}
 								touch[t0i] = true;
 							}
@@ -1453,21 +1431,20 @@ namespace XPdf {
 							for (y=cb.y0, c0i=cb.coefOff, t0i=0;
 								 y < cb.y1; ++y, c0i+=tileComp.w, t0i+=resLevel.cbW) {
 								for (x=cb.x0, c1i=c0i, t1i=t0i; x < cb.x1; ++x, ++c1i, ++t1i) {
-									int val = coeff[c1i];// coeff[0];
+									int val = coeff[c1i];
 									if (val != 0) {
-										int shift2 = shift 
-											- (cb.nBitPlanes0+cb.len+(touch[t1i]?1:0));
-										if (shift2 > 0)
-											val = (val << shift2)
-												+ (val<0 ? -(1<<(shift2-1)) : (1<<(shift2-1)));
+										int sh2 = shift-(cb.nBitPlanes0+cb.len+(touch[t1i]?1:0));
+										if (sh2 > 0)
+											val = (val << sh2)
+												+ (val<0 ? -(1<<(sh2-1)) : (1<<(sh2-1)));
 										else
-											val >>= -shift2;
+											val >>= -sh2;
 										if (qStyle != 0)
 											val = (int)(val * mu);
 										else if (tileComp.transform == 0)
 											val &= -1 << (fracBits - tileComp.prec);
+										coeff[c1i] = val;
 									}
-									coeff[c1i] = val;// coeff[0]
 								}
 							}
 						}
@@ -1504,7 +1481,6 @@ namespace XPdf {
 			idwtGamma = 0.882911075530934, idwtDelta = 0.443506852043971,
 			idwtKappa = 1.230174104914001, idwtIKappa = (1.0 / idwtKappa);
 		void InverseTransform1D(JPXTileComp tileComp, int[] data, int offset, int n) {
-			//var data = _data;
 			if (n != 1) {
 				int end = offset + n, i;
 				data[end] = data[end - 2];
@@ -1523,28 +1499,29 @@ namespace XPdf {
 						data[end + 3] = data[(n == 4) ? offset + 1 : end - 5];
 					}
 				}
-				data[offset - 1] = data[offset + 1];    //----- extend left
+				data[offset - 1] = data[offset + 1];					// extend left
 				data[offset - 2] = data[offset + 2];
 				data[offset - 3] = data[offset + 3];
 				if (offset == 4)
 					data[0] = data[offset + 4];
-				if (tileComp.transform == 0) {              //----- 9-7 irreversible filter
-					for (i = 0; i <= end + 3; i += 2)       // step 2 (odd)
+				if (tileComp.transform == 0) {							// 9-7 irreversible filter
+					double t, f;                                        // conv perf double->int
+					for (i = 0; i <= end + 3; i += 2)					// step 2 (odd)
 						data[i] = (int)(idwtIKappa * data[i]);
-					for (i = 1; i <= end + 2; i += 2)       // step 1&3 (even) - combined
-						data[i] = (int)(idwtKappa*data[i] - idwtDelta*(data[i-1]+data[i+1]));
-					for (i = 2; i <= end + 1; i += 2)       // step 4 (odd)
-						data[i] -= (int)(idwtGamma * (data[i - 1] + data[i + 1]));
-					for (i = 3; i <= end; i += 2)           // step 5 (even)
-						data[i] -= (int)(idwtBeta * (data[i - 1] + data[i + 1]));
-					for (i = 4; i <= end - 1; i += 2)       // step 6 (odd)
-						data[i] -= (int)(idwtAlpha * (data[i - 1] + data[i + 1]));
+					for (t=idwtDelta*data[0], i=1; i<=end+2; i+=2, t=f) // step 1&3 (even) - combined
+						data[i] = (int)(idwtKappa*data[i] - t - (f=idwtDelta*data[i+1]));
+					for (t=idwtGamma*data[1], i=2; i<=end+1; i+=2, t=f) // step 4 (odd)
+						data[i] -= (int)(t + (f = idwtGamma*data[i+1]));
+					for (t=idwtBeta*data[2], i=3; i<=end; i+=2, t=f)    // step 5 (even)
+						data[i] -= (int)(t + (f = idwtBeta*data[i+1]));
+					for (t=idwtAlpha*data[3], i=4; i<=end-1; i+=2, t=f) // step 6 (odd)
+						data[i] -= (int)(t + (f = idwtAlpha*data[i+1]));
 				}
-				else {                                      //----- 5-3 reversible filter
-					for (i = 3; i <= end; i += 2)           // step 1 (even)
-						data[i] -= (data[i - 1] + data[i + 1] + 2) >> 2;
-					for (i = 4; i < end; i += 2)            // step 2 (odd)
-						data[i] += (data[i - 1] + data[i + 1]) >> 1;
+				else {													// 5-3 reversible filter
+					for (i = 3; i <= end; i += 2)						// step 1 (even)
+						data[i] -= (data[i-1] + data[i+1] + 2) >> 2;
+					for (i = 4; i < end; i += 2)						// step 2 (odd)
+						data[i] += (data[i-1] + data[i+1]) >> 1;
 				}
 			}
 			else if (offset == 4)
@@ -2495,8 +2472,8 @@ namespace XPdf {
 				int flags = imgStrm.ReadByte();
 				hdTemplate	= (flags >> 1) & 0x03;		/* Bit 1-2 */
 				isMMR		= (flags & 0x01) != 0;		/* Bit 0 */
-				hdpWidth	= imgStrm.ReadSByte();
-				hdpHeight	= imgStrm.ReadSByte();
+				hdpWidth	= imgStrm.ReadByte();
+				hdpHeight	= imgStrm.ReadByte();
 				grayMax		= imgStrm.ReadInt(4);
 				dataOffset	= imgStrm.Position;
 				dataLength	= imgStrm.Length - dataOffset;
